@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Portfolio</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>My Portfolio</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="alert alert-{{ 'danger' if category == 'error' else category }}">{{ message }}</div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        {% set ns = namespace(stock_value=0) %}
+        {% for holding in holdings %}
+        {% set ns.stock_value = ns.stock_value + holding.quantity * holding.stock.price %}
+        {% endfor %}
+        <div class="row mb-4">
+            <div class="col">
+                <div class="card"><div class="card-body">
+                    <h6 class="card-subtitle text-muted">Cash</h6>
+                    <h4>${{ "%.2f"|format(current_user.cash_balance) }}</h4>
+                </div></div>
+            </div>
+            <div class="col">
+                <div class="card"><div class="card-body">
+                    <h6 class="card-subtitle text-muted">Stock Value</h6>
+                    <h4>${{ "%.2f"|format(ns.stock_value) }}</h4>
+                </div></div>
+            </div>
+            <div class="col">
+                <div class="card"><div class="card-body">
+                    <h6 class="card-subtitle text-muted">Total</h6>
+                    <h4>${{ "%.2f"|format(current_user.cash_balance + ns.stock_value) }}</h4>
+                </div></div>
+            </div>
+        </div>
+
+        <h3>Holdings</h3>
+        {% if holdings %}
+        <table class="table table-striped align-middle">
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Company</th>
+                    <th>Shares</th>
+                    <th>Price</th>
+                    <th>Value</th>
+                    <th>Sell</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for holding in holdings %}
+                <tr>
+                    <td>{{ holding.stock.ticker }}</td>
+                    <td>{{ holding.stock.company_name }}</td>
+                    <td>{{ holding.quantity }}</td>
+                    <td>${{ "%.2f"|format(holding.stock.price) }}</td>
+                    <td>${{ "%.2f"|format(holding.quantity * holding.stock.price) }}</td>
+                    <td>
+                        <form method="POST" action="{{ url_for('sell', stock_id=holding.stock.id) }}" class="d-flex">
+                            <input type="number" class="form-control me-2" name="quantity" min="1" max="{{ holding.quantity }}" placeholder="Shares" required style="max-width: 120px;">
+                            <button type="submit" class="btn btn-danger">Sell</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>You don't own any stocks yet.</p>
+        {% endif %}
+
+        <h3 class="mt-4">Transaction History</h3>
+        {% if transactions %}
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Ticker</th>
+                    <th>Shares</th>
+                    <th>Price</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in transactions %}
+                <tr>
+                    <td>{{ t.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td><span class="badge {{ 'bg-success' if t.type == 'BUY' else 'bg-danger' }}">{{ t.type }}</span></td>
+                    <td>{{ t.stock.ticker }}</td>
+                    <td>{{ t.quantity }}</td>
+                    <td>${{ "%.2f"|format(t.price) }}</td>
+                    <td>${{ "%.2f"|format(t.quantity * t.price) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No transactions yet.</p>
+        {% endif %}
+
+        <a href="{{ url_for('stocks') }}" class="btn btn-primary">Buy Stocks</a>
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">Home</a>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+</body>
+</html>
