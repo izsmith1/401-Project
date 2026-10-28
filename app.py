@@ -1,3 +1,4 @@
+import sys
 from flask import Flask, render_template, redirect, url_for, flash, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -31,6 +32,9 @@ class Stock(db.Model):
     ticker = db.Column(db.String(10), unique=True, nullable=False)  #ex: AAPL
     company_name = db.Column(db.String(250), nullable=False)
     price = db.Column(db.Numeric(12, 2), nullable=False)  #current price per share
+    initial_price = db.Column(db.Numeric(12, 2), nullable=False)  #starting price set at creation
+    shares_outstanding = db.Column(db.BigInteger, nullable=False)  #total shares defined at creation
+    available_shares = db.Column(db.BigInteger, nullable=False)  #buyable supply, starts == shares_outstanding
 
 
 class Holding(db.Model):
@@ -44,16 +48,42 @@ class Holding(db.Model):
 class Transaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=False)
-    type = db.Column(db.String(4), nullable=False)  #"BUY" or "SELL"
-    quantity = db.Column(db.Integer, nullable=False)
-    price = db.Column(db.Numeric(12, 2), nullable=False)  #price per share at time of trade
+    stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=True)  #null for cash events
+    type = db.Column(db.String(8), nullable=False)  #BUY | SELL | DEPOSIT | WITHDRAW
+    quantity = db.Column(db.Integer, nullable=False)  #shares for trades; 0 for cash events
+    amount = db.Column(db.Numeric(12, 2), nullable=True)  #cash amount for DEPOSIT/WITHDRAW
+    price = db.Column(db.Numeric(12, 2), nullable=True)  #price per share for trades; null for cash events
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     stock = db.relationship('Stock')
 
 
+class PriceHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=False)
+    price = db.Column(db.Numeric(12, 2), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    stock = db.relationship('Stock')
+
+
+class EventLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  #nullable for system events
+    event_type = db.Column(db.String(32), nullable=False)   #ACCOUNT_CREATED | BUY | SELL | DEPOSIT | WITHDRAW | PRICE_UPDATE_ERROR
+    details = db.Column(db.String(500), nullable=False)      #human-readable summary
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    user = db.relationship('User')
+
+
 with app.app_context():
     db.create_all()
+
+
+def init_db():
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+    print("Database schema dropped and recreated. Now run: python seed_stocks.py")
+
 
 #User loader - required by Flask-Login
 @login_manager.user_loader
@@ -228,3 +258,9 @@ def delete_user(user_id):
     flash('User deleted successfully!', 'success')
     return redirect(url_for('index'))
 
+
+if __name__ == "__main__":
+    if "--init-db" in sys.argv:
+        init_db()
+    else:
+        app.run(host="0.0.0.0", port=8000)
