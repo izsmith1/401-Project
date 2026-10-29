@@ -16,28 +16,51 @@
         {% endif %}
         {% endwith %}
         {% if stocks %}
-        <table class="table table-striped align-middle">
+        <table class="table table-hover align-middle">
             <thead>
                 <tr>
                     <th>Ticker</th>
                     <th>Company</th>
                     <th>Price</th>
-                    <th>Buy</th>
                 </tr>
             </thead>
             <tbody>
                 {% for stock in stocks %}
+                <tr data-bs-toggle="collapse" data-bs-target="#details-{{ stock.id }}" style="cursor: pointer;">
+                    <td><strong>{{ stock.ticker }}</strong> &#9662;</td>
+                    <td>{{ stock.company_name}}</td>
+                    <td>$<span id="price-{{ stock.id}}">{{ "%.2f"|format(stock.price) }}</span></td>
+                </tr>
                 <tr>
-                    <td>{{ stock.ticker }}</td>
-                    <td>{{ stock.company_name }}</td>
-                    <td>${{ "%.2f"|format(stock.price) }}</td>
-                    <td>
-                        <button type="button" class="btn btn-success"
-                                data-bs-toggle="modal" data-bs-target="#buyModal"
-                                data-url="{{ url_for('buy', stock_id=stock.id) }}"
-                                data-preview-url="{{ url_for('buy_preview', stock_id=stock.id) }}">
-                            Buy       
-                        </button>
+                    <td colspan="3" class="p-0 border-0">
+                        <div class="collapse stock-details" id="details-{{ stock.id}}"
+                            data-tick-url="{{ url_for('tick', stock_id=stock.id) }}">
+                            <div class="row p-3 bg-light">
+                                <div class="col-md-5">
+                                    <table class="table table-sm mb-3">
+                                        <tr><td>Change since launch</td><td class="text-end" data-stat="change">&mdash;</td></tr>
+                                        <tr><td>Launch price</td><td class="text-end" data-stat="initial_price">&mdash;</td></tr>
+                                        <tr><td>All-time high</td><td class="text-end" data-stat="all_time_high">&mdash;</td></tr>
+                                        <tr><td>All-time low</td><td class="text-end" data-stat="all_time_low">&mdash;</td></tr>
+                                        <tr><td>7-day high</td><td class="text-end" data-stat="week_high">&mdash;</td></tr>
+                                        <tr><td>7-day low</td><td class="text-end" data-stat="week_low">&mdash;</td></tr>
+                                        <tr><td>Market cap</td><td class="text-end" data-stat="market_cap">&mdash;</td></tr>
+                                        <tr><td>Shares available</td><td class="text-end" data-stat="available_shares">&mdash;</td></tr>                                        
+                                    </table>
+                                    <button type="button" class="btn btn-success w-100"
+                                            data-bs-toggle="modal" data-bs-target="#buyModal"
+                                            data-url="{{ url_for('buy', stock_id=stock.id) }}"
+                                            data-preview-url="{{ url_for('buy_preview', stock_id=stock.id) }}">
+                                        Buy {{ stock.ticker }}
+                                    </button>
+                                </div>
+                                <div class="col-md-7">
+                                    <div style="height: 260px">
+                                        <canvas id="chart-{{ stock.id }}"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -75,12 +98,14 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+
 
     <script>
         const buyModal = document.getElementById('buyModal');
         let previewUrl = '';
 
-        //Runs when the popup opens, relatedTarget is the Buy button that was clicked
+        // Runs when the popup opens, relatedTarget is the Buy button that was clicked
         buyModal.addEventListener('show.bs.modal', function (event) {
             const button = event.relatedTarget;
             previewUrl = button.dataset.previewUrl;
@@ -90,7 +115,7 @@
             updateTotals();
         });
 
-        //Recalculate on every keystroke in the shares box
+        // Recalculate on every keystroke in the shares box
         document.getElementById('buyQuantity').addEventListener('input', updateTotals);
 
         async function updateTotals() {
@@ -98,7 +123,7 @@
             const response = await fetch(previewUrl + '?quantity=' + quantity);
             const data = await response.json();
 
-            //if they kept typing while we waited, a newer request will update the numbers instead
+            // If they kept typing while we waited, a newer request will update the numbers instead
             if ((parseInt(document.getElementById('buyQuantity').value) || 0) !== quantity) return;
 
             document.getElementById('buyTicker').textContent = data.ticker;
@@ -107,10 +132,111 @@
             document.getElementById('buyCost').textContent = data.cost;
             document.getElementById('buyCashAfter').textContent = data.cash_after;
 
-            //turn "balance after" red and block the Buy button if they can't afford it
+            // Turn "balance after" red and block the Buy button if they can't afford it
             document.getElementById('buyCashAfter').parentElement.classList.toggle('text-danger', parseFloat(data.cash_after) < 0);
             document.getElementById('buyConfirm').disabled = !data.can_afford;
         }
+        // Ask the server to tick every 3 seconds
+        const TICK_MS = 3000;
+        // The running timer for each open dropdown, keyed by its id
+        const tickTimers = {};
+        // True while the Buy popup is open
+        let paused = false;
+
+        // Ask app.py to move this stock's price, then show the new numbers
+        async function tickStock(details) {
+            if (paused) return;
+            const response = await fetch(details.dataset.tickUrl, {method: 'POST'});
+            const data = await response.json();
+            showStats(details, data);
+        }
+
+        // One chart per stock, created the first time its dropdown loads, then updated each tick
+        const charts = {};
+        
+        function drawChart(stockId, history, up) {
+            // UTC from the server -> your local time
+            const labels = history.map(p => new Date(p.time).toLocaleString('en-US',
+                {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}));
+            const prices = history.map(p => parseFloat(p.price));
+            // Red and Green from Bootstrap
+            const color = up ? '#198754' : '#dc3545';
+            
+            // Swap in the new data and redraw
+            if (charts[stockId]) {
+                const chart = charts[stockId];
+                chart.data.labels = labels;
+                chart.data.datasets[0].data = prices;
+                chart.data.datasets[0].borderColor = color;
+                chart.update('none'); // Skips the animation
+                return;
+            }
+            
+            // First time: create the chart on the stocks canvas
+            charts[stockId] = new Chart(document.getElementById('chart-' + stockId), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{data: prices, borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.2}],
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    interaction: {mode: 'index', intersect: false},
+                    plugins: {legend: {display: false}},
+                    scales: {
+                        x: {ticks: {maxTicksLimit: 6}},
+                        y: {ticks: {callback: value => '$' + value}},
+                    },
+                },
+                
+            });
+
+        }
+
+
+
+        // Fill in this dropdown's stats and the price in its main row
+        function showStats(details, data) {
+            const stockId = details.id.replace('details-', '');
+            document.getElementById('price-' + stockId).textContent = data.price;
+
+            // The plain dollar amounts
+            for (const key of ['initial_price', 'all_time_high', 'all_time_low', 'week_high', 'week_low']) {
+                details.querySelector(`[data-stat="${key}"]`).textContent = '$' + data[key];
+            }
+
+            // Change since launch: green and + if up, red and - if down
+            const change = details.querySelector('[data-stat="change"]');
+            const up = parseFloat(data.change) >= 0;
+            const sign = up ? '+' : '-';
+            change.textContent = sign + '$' + data.change.replace('-', '') + ' (' + sign + data.change_pct.replace('-', '') + '%)';
+            change.className = 'text-end ' + (up ? 'text-success' : 'text-danger');
+
+            // Big numbers with commas, like 121,400,000
+            details.querySelector('[data-stat="market_cap"]').textContent = 
+                '$' + Number(data.market_cap).toLocaleString('en-US', {maximumFractionDigits: 0});
+            details.querySelector('[data-stat="available_shares"]').textContent = 
+                data.available_shares.toLocaleString('en-US') + ' / ' + data.shares_outstanding.toLocaleString('en-US');
+
+            drawChart(stockId, data.history, up);
+        }
+
+        // Start ticking when a dropdown opens, stop when it closes
+        document.querySelectorAll('.stock-details').forEach(function (details){
+            details.addEventListener('show.bs.collapse', function () {
+                // Once right away so the stats don't sit on dashes for 3 seconds
+                tickStock(details); 
+                tickTimers[details.id] = setInterval(() => tickStock(details), TICK_MS);
+            });
+            details.addEventListener('hide.bs.collapse', function () {
+                clearInterval(tickTimers[details.id]);
+                delete tickTimers[details.id];
+            });
+        });
+
+        // Hold every price still while the Buy popup is open
+        buyModal.addEventListener('show.bs.modal', () => paused = true);
+        buyModal.addEventListener('hidden.bs.modal', () => paused = false);
     </script>
 </body>
 </html>

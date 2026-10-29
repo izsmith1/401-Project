@@ -1,10 +1,13 @@
-import sys
+import sys, random
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal  #use Decimal for money, floats cause rounding errors
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
@@ -54,7 +57,7 @@ class Transaction(db.Model):
     quantity = db.Column(db.Integer, nullable=False)  #shares for trades; 0 for cash events
     amount = db.Column(db.Numeric(12, 2), nullable=True)  #cash amount for DEPOSIT/WITHDRAW
     price = db.Column(db.Numeric(12, 2), nullable=True)  #price per share for trades; null for cash events
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = db.Column(db.DateTime, default=utc_now, nullable=False)
     stock = db.relationship('Stock')
 
 
@@ -62,7 +65,7 @@ class PriceHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=False)
     price = db.Column(db.Numeric(12, 2), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = db.Column(db.DateTime, default=utc_now, nullable=False)
     stock = db.relationship('Stock')
 
 
@@ -71,7 +74,7 @@ class EventLog(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  #nullable for system events
     event_type = db.Column(db.String(32), nullable=False)   #ACCOUNT_CREATED | BUY | SELL | DEPOSIT | WITHDRAW | PRICE_UPDATE_ERROR
     details = db.Column(db.String(500), nullable=False)      #human-readable summary
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = db.Column(db.DateTime, default=utc_now, nullable=False)
     user = db.relationship('User')
 
 
@@ -147,6 +150,73 @@ def portfolio():
 def stocks():
     return render_template('stocks.html', stocks=Stock.query.all())
 
+# How many recent prices to send for the graph
+HISTORY_POINTS = 100 
+
+# Build the stats for one stock's dropdown - shared by the stats and tick route
+def build_stats(stock):
+    history = PriceHistory.query.filter_by(stock_id=stock.id)
+    week_ago = utc_now() - timedelta(days=7)
+
+    # Let MySQL fin the lowest / highest instead of loading every row into Python
+    all_low, all_high = history.with_entities(
+        db.func.min(PriceHistory.price), db.func.max(PriceHistory.price)).one()
+    week_low, week_high = history.filter(PriceHistory.timestamp >= week_ago).with_entities(
+        db.func.min(PriceHistory.price), db.func.max(PriceHistory.price)).one()
+
+    change = stock.price - stock.initial_price
+    change_pct = (change / stock.initial_price * 100).quantize(Decimal('0.01'))
+
+    # Newest points first so LIMIT keeps the most recent, then flip to oldest-first for the graph
+    points = history.order_by(PriceHistory.timestamp.desc()).limit(HISTORY_POINTS).all()
+    points.reverse()
+
+    return {
+        'ticker': stock.ticker,
+        'price': str(stock.price),
+        'initial_price': str(stock.initial_price),
+        'change': str(change),
+        'change_pct': str(change_pct),
+        'all_time_high': str(all_high or stock.price),
+        'all_time_low': str(all_low or stock.price),
+        'week_high': str(week_high or stock.price),
+        'week_low': str(week_low or stock.price),
+        'market_cap': str(stock.price * stock.shares_outstanding),
+        'shares_outstanding': stock.shares_outstanding,
+        'available_shares': stock.available_shares,
+        'history': [{'time': p.timestamp.isoformat() + 'Z', 'price': str(p.price)} for p in points],
+    }
+
+# STATS - Price stats and history for on stock's dropdown
+@app.route('/stocks/<int:stock_id>/stats')
+@login_required
+def stock_stats(stock_id):
+    stock = Stock.query.get_or_404(stock_id)
+    return jsonify(build_stats(stock))
+
+# A stock can move at most once every 2 seconds, no matter how many people are watching
+MIN_TICK_SECONDS = 2 
+# Each tick moves the price up to 1% up or down
+MAX_TICK_CHANGE = 0.01
+
+
+# TICK - Randomly move a stock's price (called every few seconds while its dropdown is open)
+@app.route('/stocks/<int:stock_id>/tick', methods=['POST'])
+@login_required
+def tick(stock_id):
+    # Lock the stock row so two viewers ticking at the same moment can't both move it
+    stock = Stock.query.with_for_update().get_or_404(stock_id)
+    last = PriceHistory.query.filter_by(stock_id=stock.id).order_by(PriceHistory.timestamp.desc()).first()
+
+    # Only move the price if it hasn't moved in the last few seconds
+    if last is None or utc_now() - last.timestamp >= timedelta(seconds=MIN_TICK_SECONDS):
+        change = Decimal(str(random.uniform(-MAX_TICK_CHANGE, MAX_TICK_CHANGE)))
+        stock.price = max((stock.price * (1 + change)).quantize(Decimal('0.01')), Decimal('0.01'))
+        db.session.add(PriceHistory(stock_id=stock.id, price=stock.price))
+
+    # Saves the new price and releases the lock (even if nothing changed)
+    db.session.commit()
+    return jsonify(build_stats(stock))
 
 #PREVIEW - Show what a buy would cost without changing anything
 @app.route('/buy/<int:stock_id>/preview')
@@ -268,33 +338,6 @@ def sell(stock_id):
         flash('Trade failed, please try again', 'error')
 
     return redirect(url_for('portfolio'))
-
-# UPDATE - Edit an individual user
-@app.route('/update/<int:user_id>', methods=['POST'])
-def update_user(user_id):
-    user = User.query.get_or_404(user_id)
-
-    # TODO: Implement update user functionality
-    user.username = request.form['username']
-    new_password = request.form.get('password')
-    if new_password: #leave password unchanged if field is blank
-        user.password = bcrypt.generate_password_hash(new_password).decode('utf-8')
-    db.session.commit()
-    flash('User updated successfully!', 'success')
-
-    return redirect(url_for('view_user', user_id=user_id))
-
-# DELETE - Delete a user
-@app.route('/delete/<int:user_id>', methods=['POST'])
-def delete_user(user_id):
-
-    # TODO: Implement delete user functionality
-    user = User.query.get_or_404(user_id)
-    db.session.delete(user)
-    db.session.commit()
-    flash('User deleted successfully!', 'success')
-    return redirect(url_for('index'))
-
 
 if __name__ == "__main__":
     if "--init-db" in sys.argv:
