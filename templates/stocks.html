@@ -32,10 +32,12 @@
                     <td>{{ stock.company_name }}</td>
                     <td>${{ "%.2f"|format(stock.price) }}</td>
                     <td>
-                        <form method="POST" action="{{ url_for('buy', stock_id=stock.id) }}" class="d-flex">
-                            <input type="number" class="form-control me-2" name="quantity" min="1" placeholder="Shares" required style="max-width: 120px;">
-                            <button type="submit" class="btn btn-success">Buy</button>
-                        </form>
+                        <button type="button" class="btn btn-success"
+                                data-bs-toggle="modal" data-bs-target="#buyModal"
+                                data-url="{{ url_for('buy', stock_id=stock.id) }}"
+                                data-preview-url="{{ url_for('buy_preview', stock_id=stock.id) }}">
+                            Buy       
+                        </button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -47,6 +49,68 @@
         <a href="{{ url_for('portfolio') }}" class="btn btn-primary">My Portfolio</a>
         <a href="{{ url_for('index') }}" class="btn btn-secondary">Home</a>
     </div>
+    <div class="modal fade" id="buyModal" tabindex="-1" aria-labelledby="buyModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <form method="POST" id="buyForm" class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="buyModalLabel">Buy <span id="buyTicker"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Current balance:<strong>   $<span id="buyCashNow"></span></strong></p>
+                    <label for="buyQuantity" class="form-label">Shares</label>
+                    <input type="number" class="form-control mb-3" id="buyQuantity" name="quantity" min="1" required>
+                    <table class="table table-sm mb-0">
+                        <tr><td>Price per share</td><td class="text-end">$<span id="buyPrice"></span></td></tr>
+                        <tr><td>Total cost</td><td class="text-end">$<span id="buyCost">0.00</span></td></tr>
+                        <tr class="fw-bold"><td>Balance after</td><td class="text-end">$<span id="buyCashAfter"></span></td></tr>
+                    </table>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success" id="buyConfirm">Buy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+
+    <script>
+        const buyModal = document.getElementById('buyModal');
+        let previewUrl = '';
+
+        //Runs when the popup opens, relatedTarget is the Buy button that was clicked
+        buyModal.addEventListener('show.bs.modal', function (event) {
+            const button = event.relatedTarget;
+            previewUrl = button.dataset.previewUrl;
+
+            document.getElementById('buyForm').action = button.dataset.url;
+            document.getElementById('buyQuantity').value = ''; //clear the lsat entry
+            updateTotals();
+        });
+
+        //Recalculate on every keystroke in the shares box
+        document.getElementById('buyQuantity').addEventListener('input', updateTotals);
+
+        async function updateTotals() {
+            const quantity = parseInt(document.getElementById('buyQuantity').value) || 0;
+            const response = await fetch(previewUrl + '?quantity=' + quantity);
+            const data = await response.json();
+
+            //if they kept typing while we waited, a newer request will update the numbers instead
+            if ((parseInt(document.getElementById('buyQuantity').value) || 0) !== quantity) return;
+
+            document.getElementById('buyTicker').textContent = data.ticker;
+            document.getElementById('buyPrice').textContent = data.price;
+            document.getElementById('buyCashNow').textContent = data.cash_now;
+            document.getElementById('buyCost').textContent = data.cost;
+            document.getElementById('buyCashAfter').textContent = data.cash_after;
+
+            //turn "balance after" red and block the Buy button if they can't afford it
+            document.getElementById('buyCashAfter').parentElement.classList.toggle('text-danger', parseFloat(data.cash_after) < 0);
+            document.getElementById('buyConfirm').disabled = !data.can_afford;
+        }
+    </script>
 </body>
 </html>

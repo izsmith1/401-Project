@@ -62,10 +62,12 @@
                     <td>${{ "%.2f"|format(holding.stock.price) }}</td>
                     <td>${{ "%.2f"|format(holding.quantity * holding.stock.price) }}</td>
                     <td>
-                        <form method="POST" action="{{ url_for('sell', stock_id=holding.stock.id) }}" class="d-flex">
-                            <input type="number" class="form-control me-2" name="quantity" min="1" max="{{ holding.quantity }}" placeholder="Shares" required style="max-width: 120px;">
-                            <button type="submit" class="btn btn-danger">Sell</button>
-                        </form>
+                        <button type="button" class="btn btn-danger"
+                                data-bs-toggle="modal" data-bs-target="#sellModal"
+                                data-url="{{ url_for('sell', stock_id=holding.stock.id) }}"
+                                data-preview-url="{{ url_for('sell_preview', stock_id=holding.stock.id) }}">
+                            Sell       
+                        </button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -108,6 +110,70 @@
         <a href="{{ url_for('stocks') }}" class="btn btn-primary">Buy Stocks</a>
         <a href="{{ url_for('index') }}" class="btn btn-secondary">Home</a>
     </div>
+    <div class="modal fade" id="sellModal" tabindex="-1" aria-labelledby="sellModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <form method="POST" id="sellForm" class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="sellModalLabel">Sell <span id="sellTicker"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Current Stocks Owned:<strong>   <span id="sellShare"></span></strong></p>
+                    <label for="sellQuantity" class="form-label">Shares</label>
+                    <input type="number" class="form-control mb-3" id="sellQuantity" name="quantity" min="1" required>
+                    <table class="table table-sm mb-0">
+                        <tr><td>Current balance</td><td class="text-end">$<span id="sellCashNow"></span></td></tr>
+                        <tr><td>Price per share</td><td class="text-end">$<span id="sellPrice"></span></td></tr>
+                        <tr><td>Sale Amount</td><td class="text-end">$<span id="sellProceed">0.00</span></td></tr>
+                        <tr class="fw-bold"><td>Balance after</td><td class="text-end">$<span id="sellCashAfter"></span></td></tr>
+                    </table>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger" id="sellConfirm">Sell</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+
+    <script>
+        const sellModal = document.getElementById('sellModal');
+        let previewUrl = '';
+
+        //Runs when the popup opens, relatedTarget is the Sell button that was clicked
+        sellModal.addEventListener('show.bs.modal', function (event) {
+            const button = event.relatedTarget;
+            previewUrl = button.dataset.previewUrl;
+
+            document.getElementById('sellForm').action = button.dataset.url;
+            document.getElementById('sellQuantity').value = ''; //clear the last entry
+            updateTotals();
+        });
+
+        //Recalculate on every keystroke in the shares box
+        document.getElementById('sellQuantity').addEventListener('input', updateTotals);
+
+        async function updateTotals() {
+            const quantity = parseInt(document.getElementById('sellQuantity').value) || 0;
+            const response = await fetch(previewUrl + '?quantity=' + quantity);
+            const data = await response.json();
+
+            //if they kept typing while we waited, a newer request will update the numbers instead
+            if ((parseInt(document.getElementById('sellQuantity').value) || 0) !== quantity) return;
+
+            document.getElementById('sellTicker').textContent = data.ticker;
+            document.getElementById('sellPrice').textContent = data.price;
+            document.getElementById('sellShare').textContent = data.shares_owned;
+            document.getElementById('sellProceed').textContent = data.proceeds;
+            document.getElementById('sellCashNow').textContent = data.cash_now;
+            document.getElementById('sellCashAfter').textContent = data.cash_after;
+
+            //turn "shares owned" red and block the Sell button if they don't own enough
+            document.getElementById('sellShare').parentElement.classList.toggle('text-danger', quantity > data.shares_owned);
+            document.getElementById('sellConfirm').disabled = !data.can_sell;
+        }
+
+    </script>
 </body>
 </html>

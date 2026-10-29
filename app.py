@@ -1,5 +1,5 @@
 import sys
-from flask import Flask, render_template, redirect, url_for, flash, request
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
@@ -9,14 +9,15 @@ from decimal import Decimal  #use Decimal for money, floats cause rounding error
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+pymysql://admin:password@my-rds-instance.cj2mkc24wf4l.us-east-2.rds.amazonaws.com:3306/stockdb"
+app.config.from_object('config')  #DB login and secret key live in config.py (gitignored)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'your-secret-key-here'
 
 db = SQLAlchemy(app)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
+login_manager.login_view = 'login'
+
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -147,6 +148,24 @@ def stocks():
     return render_template('stocks.html', stocks=Stock.query.all())
 
 
+#PREVIEW - Show what a buy would cost without changing anything
+@app.route('/buy/<int:stock_id>/preview')
+@login_required
+def buy_preview(stock_id):
+    stock = Stock.query.get_or_404(stock_id)
+    quantity = request.args.get('quantity', default=0, type=int)
+    cost = stock.price * quantity
+    cash_after = current_user.cash_balance - cost
+
+    return jsonify(
+        ticker=stock.ticker,
+        price=str(stock.price),
+        cash_now=str(current_user.cash_balance),
+        cost=str(cost),
+        cash_after=str(cash_after),
+        can_afford=quantity > 0 and cash_after >= 0
+    )
+
 # BUY - Purchase shares of a stock
 @app.route('/buy/<int:stock_id>', methods=['POST'])
 @login_required
@@ -191,6 +210,24 @@ def buy(stock_id):
 
     return redirect(url_for('portfolio'))
 
+@app.route('/sell/<int:stock_id>/preview')
+@login_required
+def sell_preview(stock_id):
+    stock = Stock.query.get_or_404(stock_id)
+    quantity = request.args.get('quantity', default=0, type=int)
+    holding = Holding.query.filter_by(user_id=current_user.id, stock_id=stock.id).first()
+    owned = holding.quantity if holding else 0
+    proceeds = stock.price * quantity
+
+    return jsonify(
+        ticker=stock.ticker,
+        price=str(stock.price),
+        cash_now=str(current_user.cash_balance),
+        shares_owned=owned,
+        proceeds=str(proceeds),
+        cash_after=str(current_user.cash_balance + proceeds),
+        can_sell=0 < quantity <= owned,
+    )
 
 # SELL - Sell shares of a stock
 @app.route('/sell/<int:stock_id>', methods=['POST'])
