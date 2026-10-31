@@ -89,6 +89,13 @@ def init_db():
     print("Database schema dropped and recreated. Now run: python seed_stocks.py")
 
 
+def log_event(user_id, event_type, details):
+    # Records one line in the event log (who did what, and when). We only add it to the
+    # session here; it gets saved by the same db.session.commit() as the action that called
+    # it, so if that action is rolled back the log line is dropped too.
+    db.session.add(EventLog(user_id=user_id, event_type=event_type, details=details))
+
+
 #User loader - required by Flask-Login
 @login_manager.user_loader
 def load_user(user_id):
@@ -104,6 +111,8 @@ def register():
             role='user' #default role
         )
         db.session.add(user)
+        db.session.flush()  # assigns user.id so we can log who was created
+        log_event(user.id, 'ACCOUNT_CREATED', f'Account created for {user.username}')
         db.session.commit()
         flash('User registered successfully!', 'success')
         return redirect(url_for('login'))
@@ -270,6 +279,9 @@ def buy(stock_id):
     db.session.add(Transaction(user_id=user.id, stock_id=stock.id, type='BUY',
                                quantity=quantity, price=stock.price))
 
+# 4. log the event (saved by the same commit below)
+    log_event(user.id, 'BUY', f'Bought {quantity} {stock.ticker} at {stock.price}')
+
 # Save all 3 changes together - if anything fails, none of them are saved
     try:
         db.session.commit()
@@ -328,6 +340,9 @@ def sell(stock_id):
 # 3. record the transaction
     db.session.add(Transaction(user_id=user.id, stock_id=stock.id, type='SELL',
                                quantity=quantity, price=stock.price))
+
+# 4. log the event (saved by the same commit below)
+    log_event(user.id, 'SELL', f'Sold {quantity} {stock.ticker} at {stock.price}')
 
 # Save all 3 changes together
     try:
