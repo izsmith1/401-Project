@@ -17,7 +17,7 @@
 
         {% set ns = namespace(stock_value=0) %}
         {% for holding in holdings %}
-        {% set ns.stock_value = ns.stock_value + holding.quantity * holding.stock.price %}
+        {% set ns.stock_value = ns.stock_value + holding.quantity * holding.stock.current_price %}
         {% endfor %}
         <div class="row mb-4">
             <div class="col">
@@ -59,8 +59,8 @@
                     <td>{{ holding.stock.ticker }}</td>
                     <td>{{ holding.stock.company_name }}</td>
                     <td>{{ holding.quantity }}</td>
-                    <td>${{ "%.2f"|format(holding.stock.price) }}</td>
-                    <td>${{ "%.2f"|format(holding.quantity * holding.stock.price) }}</td>
+                    <td>${{ "%.2f"|format(holding.stock.current_price) }}</td>
+                    <td>${{ "%.2f"|format(holding.quantity * holding.stock.current_price) }}</td>
                     <td>
                         <button type="button" class="btn btn-danger"
                                 data-bs-toggle="modal" data-bs-target="#sellModal"
@@ -93,12 +93,12 @@
             <tbody>
                 {% for t in transactions %}
                 <tr>
-                    <td>{{ t.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
-                    <td><span class="badge {{ 'bg-success' if t.type == 'BUY' else 'bg-danger' }}">{{ t.type }}</span></td>
-                    <td>{{ t.stock.ticker }}</td>
-                    <td>{{ t.quantity }}</td>
-                    <td>${{ "%.2f"|format(t.price) }}</td>
-                    <td>${{ "%.2f"|format(t.quantity * t.price) }}</td>
+                    <td>{{ t.transaction_date.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td><span class="badge {{ 'bg-success' if t.transaction_type == 'BUY' else 'bg-danger' }}">{{ t.transaction_type }}</span></td>
+                    <td>{{ t.stock.ticker if t.stock else '—' }}</td>
+                    <td>{{ t.quantity if t.stock else '—' }}</td>
+                    <td>{{ "$%.2f"|format(t.price) if t.price is not none else '—' }}</td>
+                    <td>${{ "%.2f"|format(t.amount) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

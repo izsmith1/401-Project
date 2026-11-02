@@ -29,7 +29,7 @@
                 <tr data-bs-toggle="collapse" data-bs-target="#details-{{ stock.id }}" style="cursor: pointer;">
                     <td><strong>{{ stock.ticker }}</strong> &#9662;</td>
                     <td>{{ stock.company_name}}</td>
-                    <td>$<span id="price-{{ stock.id}}">{{ "%.2f"|format(stock.price) }}</span></td>
+                    <td>$<span id="price-{{ stock.id}}">{{ "%.2f"|format(stock.current_price) }}</span></td>
                 </tr>
                 <tr>
                     <td colspan="3" class="p-0 border-0">

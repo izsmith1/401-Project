@@ -23,59 +23,96 @@ login_manager.login_view = 'login'
 
 
 class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(250), unique=True, nullable=False)
-    password = db.Column(db.String(250), nullable=False)
-    role = db.Column(db.String(50), default="user", nullable=False)
-    cash_balance = db.Column(db.Numeric(12, 2), default=Decimal('10000.00'), nullable=False)  #starting money
+    __tablename__ = 'users'
+    #.id for Flask-Login
+    id = db.Column('user_id', db.Integer, primary_key=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    first_name = db.Column(db.String(255))
+    last_name = db.Column(db.String(255))
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    cash_balance = db.Column(db.Numeric(10, 2), default=Decimal('10000.00'), nullable=False)  #starting money
+    created_at = db.Column(db.DateTime, default=utc_now, nullable=False)
     holdings = db.relationship('Holding', backref='user', lazy=True)
     transactions = db.relationship('Transaction', backref='user', lazy=True)
+    # Only set if this user is an admin
+    admin = db.relationship('Administrator', backref='user', uselist=False)
+    
+    # Replaces the old role column, a user is an admin if they have a row in administrators
+    @property
+    def is_admin(self):
+        return self.admin is not None
+
+
+class Administrator(db.Model):
+    __tablename__='administrators'
+    id = db.Column('admin_id', db.Integer, primary_key=True)
+    # One admin row per user
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), unique=True, nullable=False)
+    # When they were made an admin
+    granted_at = db.Column(db.DateTime, default=utc_now, nullable=False)
+
 
 class Stock(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    ticker = db.Column(db.String(10), unique=True, nullable=False)  #ex: AAPL
-    company_name = db.Column(db.String(250), nullable=False)
-    price = db.Column(db.Numeric(12, 2), nullable=False)  #current price per share
-    initial_price = db.Column(db.Numeric(12, 2), nullable=False)  #starting price set at creation
-    shares_outstanding = db.Column(db.BigInteger, nullable=False)  #total shares defined at creation
-    available_shares = db.Column(db.BigInteger, nullable=False)  #buyable supply, starts == shares_outstanding
+    __tablename__ = 'stocks'
+    id = db.Column('stock_id', db.Integer, primary_key=True)
+    company_name = db.Column(db.String(255), nullable=False)
+    ticker = db.Column(db.String(10), unique=True, nullable=False)  # Example: AAPL
+    shares_available = db.Column(db.Integer, nullable=False)  # Buyable supply, starts == shares_outstanding
+    current_price = db.Column(db.Numeric(10, 2), nullable=False)  # Current price per share
+    created_by = db.Column(db.Integer, db.ForeignKey('administrators.admin_id'), nullable=True) # Admin who added it, null for seeded stocks
+    initial_price = db.Column(db.Numeric(10, 2), nullable=False)  # Starting price set at creation
+    shares_outstanding = db.Column(db.Integer, nullable=False)  # Total shares defined at creation
 
 
 class Holding(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=False)
+    __tablename__ = 'holdings'
+    id = db.Column('holding_id', db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+    stock_id = db.Column(db.Integer, db.ForeignKey('stocks.stock_id'), nullable=False)
     quantity = db.Column(db.Integer, default=0, nullable=False)
     stock = db.relationship('Stock')
-    __table_args__ = (db.UniqueConstraint('user_id', 'stock_id'),)  #one row per user per stock
+    __table_args__ = (db.UniqueConstraint('user_id', 'stock_id'),)  # One row per user per stock
 
 class Transaction(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=True)  #null for cash events
-    type = db.Column(db.String(8), nullable=False)  #BUY | SELL | DEPOSIT | WITHDRAW
-    quantity = db.Column(db.Integer, nullable=False)  #shares for trades; 0 for cash events
-    amount = db.Column(db.Numeric(12, 2), nullable=True)  #cash amount for DEPOSIT/WITHDRAW
-    price = db.Column(db.Numeric(12, 2), nullable=True)  #price per share for trades; null for cash events
-    timestamp = db.Column(db.DateTime, default=utc_now, nullable=False)
+    __tablename__ = 'transactions'
+    id = db.Column('transaction_id', db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+    stock_id = db.Column(db.Integer, db.ForeignKey('stocks.stock_id'), nullable=True)  # Null for Deposit / Withdraw
+    transaction_type = db.Column(db.Enum('BUY', 'SELL', 'DEPOSIT', 'WITHDRAW', name='transaction_type_enum'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)  # Shares for trades; 0 for cash events
+    price = db.Column(db.Numeric(10, 2), nullable=True)  # Price per share for trades; null for cash events
+    amount = db.Column(db.Numeric(10, 2), nullable=False)  # Total cash moved, filled in for every row
+    transaction_date = db.Column(db.DateTime, default=utc_now, nullable=False)
     stock = db.relationship('Stock')
 
 
 class PriceHistory(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    stock_id = db.Column(db.Integer, db.ForeignKey('stock.id'), nullable=False)
-    price = db.Column(db.Numeric(12, 2), nullable=False)
+    __tablename__ = 'price_history'
+    id = db.Column('price_history_id', db.Integer, primary_key=True)
+    stock_id = db.Column(db.Integer, db.ForeignKey('stocks.stock_id'), nullable=False)
+    price = db.Column(db.Numeric(10, 2), nullable=False)
     timestamp = db.Column(db.DateTime, default=utc_now, nullable=False)
     stock = db.relationship('Stock')
 
 
 class EventLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  #nullable for system events
-    event_type = db.Column(db.String(32), nullable=False)   #ACCOUNT_CREATED | BUY | SELL | DEPOSIT | WITHDRAW | PRICE_UPDATE_ERROR
-    details = db.Column(db.String(500), nullable=False)      #human-readable summary
-    timestamp = db.Column(db.DateTime, default=utc_now, nullable=False)
+    __tablename__ = 'event_log'
+    id = db.Column('event_id', db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=True)  # Nullable for system events
+    event_type = db.Column(db.String(100), nullable=False)   #ACCOUNT_CREATED | BUY | SELL | DEPOSIT | WITHDRAW | PRICE_UPDATE_ERROR
+    description = db.Column(db.String(255), nullable=False)      # Summary for Auditing from admins
+    event_date = db.Column(db.DateTime, default=utc_now, nullable=False)
     user = db.relationship('User')
+
+class MarketSchedule(db.Model):
+    __tablename__ = 'market_schedule'
+    id = db.Column('schedule_id', db.Integer, primary_key=True)
+    schedule_date = db.Column(db.Date, unique=True, nullable=False) # One row per date, overrides the default weekday 9-5
+    open_time = db.Column(db.Time, nullable=True) # Null when market is closed
+    close_time = db.Column(db.Time, nullable=True)
+    is_closed = db.Column(db.Boolean, default=False, nullable=False) # True for holidays
+    updated_by = db.Column(db.Integer, db.ForeignKey('administrators.admin_id'), nullable=True) # Admin who set it
 
 
 with app.app_context():
@@ -100,8 +137,10 @@ def register():
         hashed_password = bcrypt.generate_password_hash(request.form.get('password')).decode('utf-8')
         user = User(
             username=request.form.get('username'),
-            password=hashed_password,
-            role='user' #default role
+            email=request.form.get('email'),
+            first_name=request.form.get('first_name'),
+            last_name=request.form.get('last_name'),
+            password_hash=hashed_password,
         )
         db.session.add(user)
         db.session.commit()
@@ -115,7 +154,7 @@ def login():
     if request.method == 'POST':
         user = User.query.filter_by(username=request.form.get('username')).first()
         if user and bcrypt.check_password_hash( 
-            user.password, request.form.get("password")
+            user.password_hash, request.form.get("password")
         ):
             login_user(user)
             flash('Logged in successfully!', 'success')
@@ -141,7 +180,7 @@ def index():
 @login_required
 def portfolio():
     holdings = Holding.query.filter_by(user_id=current_user.id).filter(Holding.quantity > 0).all()
-    transactions = Transaction.query.filter_by(user_id=current_user.id).order_by(Transaction.timestamp.desc()).all()
+    transactions = Transaction.query.filter_by(user_id=current_user.id).order_by(Transaction.transaction_date.desc()).all()
     return render_template('portfolio.html', holdings=holdings, transactions=transactions)
 
 # READ - List all stocks with buy/sell forms
@@ -164,7 +203,7 @@ def build_stats(stock):
     week_low, week_high = history.filter(PriceHistory.timestamp >= week_ago).with_entities(
         db.func.min(PriceHistory.price), db.func.max(PriceHistory.price)).one()
 
-    change = stock.price - stock.initial_price
+    change = stock.current_price - stock.initial_price
     change_pct = (change / stock.initial_price * 100).quantize(Decimal('0.01'))
 
     # Newest points first so LIMIT keeps the most recent, then flip to oldest-first for the graph
@@ -173,17 +212,17 @@ def build_stats(stock):
 
     return {
         'ticker': stock.ticker,
-        'price': str(stock.price),
+        'price': str(stock.current_price),
         'initial_price': str(stock.initial_price),
         'change': str(change),
         'change_pct': str(change_pct),
-        'all_time_high': str(all_high or stock.price),
-        'all_time_low': str(all_low or stock.price),
-        'week_high': str(week_high or stock.price),
-        'week_low': str(week_low or stock.price),
-        'market_cap': str(stock.price * stock.shares_outstanding),
+        'all_time_high': str(all_high or stock.current_price),
+        'all_time_low': str(all_low or stock.current_price),
+        'week_high': str(week_high or stock.current_price),
+        'week_low': str(week_low or stock.current_price),
+        'market_cap': str(stock.current_price * stock.shares_outstanding),
         'shares_outstanding': stock.shares_outstanding,
-        'available_shares': stock.available_shares,
+        'available_shares': stock.shares_available,
         'history': [{'time': p.timestamp.isoformat() + 'Z', 'price': str(p.price)} for p in points],
     }
 
@@ -211,8 +250,8 @@ def tick(stock_id):
     # Only move the price if it hasn't moved in the last few seconds
     if last is None or utc_now() - last.timestamp >= timedelta(seconds=MIN_TICK_SECONDS):
         change = Decimal(str(random.uniform(-MAX_TICK_CHANGE, MAX_TICK_CHANGE)))
-        stock.price = max((stock.price * (1 + change)).quantize(Decimal('0.01')), Decimal('0.01'))
-        db.session.add(PriceHistory(stock_id=stock.id, price=stock.price))
+        stock.current_price = max((stock.current_price * (1 + change)).quantize(Decimal('0.01')), Decimal('0.01'))
+        db.session.add(PriceHistory(stock_id=stock.id, price=stock.current_price))
 
     # Saves the new price and releases the lock (even if nothing changed)
     db.session.commit()
@@ -224,12 +263,12 @@ def tick(stock_id):
 def buy_preview(stock_id):
     stock = Stock.query.get_or_404(stock_id)
     quantity = request.args.get('quantity', default=0, type=int)
-    cost = stock.price * quantity
+    cost = stock.current_price * quantity
     cash_after = current_user.cash_balance - cost
 
     return jsonify(
         ticker=stock.ticker,
-        price=str(stock.price),
+        price=str(stock.current_price),
         cash_now=str(current_user.cash_balance),
         cost=str(cost),
         cash_after=str(cash_after),
@@ -250,7 +289,7 @@ def buy(stock_id):
 
 # Lock the user's row so two trades at once can't both spend the same cash
     user = User.query.with_for_update().get(current_user.id)
-    total_cost = stock.price * quantity
+    total_cost = stock.current_price * quantity
 
     if user.cash_balance < total_cost:
         flash('Not enough cash for this purchase', 'error')
@@ -267,8 +306,8 @@ def buy(stock_id):
         db.session.add(Holding(user_id=user.id, stock_id=stock.id, quantity=quantity))
 
 # 3. record the transaction
-    db.session.add(Transaction(user_id=user.id, stock_id=stock.id, type='BUY',
-                               quantity=quantity, price=stock.price))
+    db.session.add(Transaction(user_id=user.id, stock_id=stock.id, transaction_type='BUY',
+                               quantity=quantity, price=stock.current_price, amount=total_cost))
 
 # Save all 3 changes together - if anything fails, none of them are saved
     try:
@@ -287,11 +326,11 @@ def sell_preview(stock_id):
     quantity = request.args.get('quantity', default=0, type=int)
     holding = Holding.query.filter_by(user_id=current_user.id, stock_id=stock.id).first()
     owned = holding.quantity if holding else 0
-    proceeds = stock.price * quantity
+    proceeds = stock.current_price * quantity
 
     return jsonify(
         ticker=stock.ticker,
-        price=str(stock.price),
+        price=str(stock.current_price),
         cash_now=str(current_user.cash_balance),
         shares_owned=owned,
         proceeds=str(proceeds),
@@ -319,15 +358,16 @@ def sell(stock_id):
         flash('You do not own enough shares to sell', 'error')
         return redirect(url_for('portfolio'))
 
-# 1. remove the shares
+# 1. Remove the shares
     holding.quantity -= quantity
 
-# 2. add the money
-    user.cash_balance += stock.price * quantity
+# 2. Add the money
+    proceeds = stock.current_price * quantity
+    user.cash_balance += proceeds
 
-# 3. record the transaction
-    db.session.add(Transaction(user_id=user.id, stock_id=stock.id, type='SELL',
-                               quantity=quantity, price=stock.price))
+# 3. Record the transaction
+    db.session.add(Transaction(user_id=user.id, stock_id=stock.id, transaction_type='SELL',
+                               quantity=quantity, price=stock.current_price, amount=proceeds))
 
 # Save all 3 changes together
     try:

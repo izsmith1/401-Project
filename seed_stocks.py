@@ -47,10 +47,10 @@ with app.app_context():
         stock = Stock(
             ticker=ticker,
             company_name=company_name,
-            price=prices[-1],                # Current price = last day of history
+            current_price=prices[-1],                # Current price = last day of history
             initial_price=starting_price,    # Remembers the price it launched at
             shares_outstanding=SHARES_EACH,  # Total shares that exist
-            available_shares=SHARES_EACH,    # All shares are available to buy at first
+            shares_available=SHARES_EACH,    # All shares are available to buy at first
         )
         db.session.add(stock)
         # Flush so the database assigns stock.id now, which the PriceHistory row below needs.
