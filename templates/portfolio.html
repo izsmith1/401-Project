@@ -14,11 +14,6 @@
         {% endfor %}
         {% endif %}
         {% endwith %}
-
-        {% set ns = namespace(stock_value=0) %}
-        {% for holding in holdings %}
-        {% set ns.stock_value = ns.stock_value + holding.quantity * holding.stock.current_price %}
-        {% endfor %}
         <div class="row mb-4">
             <div class="col">
                 <div class="card"><div class="card-body">
@@ -29,13 +24,13 @@
             <div class="col">
                 <div class="card"><div class="card-body">
                     <h6 class="card-subtitle text-muted">Stock Value</h6>
-                    <h4>${{ "%.2f"|format(ns.stock_value) }}</h4>
+                    <h4>${{ "%.2f"|format(stock_value) }}</h4>
                 </div></div>
             </div>
             <div class="col">
                 <div class="card"><div class="card-body">
                     <h6 class="card-subtitle text-muted">Total</h6>
-                    <h4>${{ "%.2f"|format(current_user.cash_balance + ns.stock_value) }}</h4>
+                    <h4>${{ "%.2f"|format(current_user.cash_balance + stock_value) }}</h4>
                 </div></div>
             </div>
         </div>
@@ -65,8 +60,9 @@
                         <button type="button" class="btn btn-danger"
                                 data-bs-toggle="modal" data-bs-target="#sellModal"
                                 data-url="{{ url_for('sell', stock_id=holding.stock.id) }}"
-                                data-preview-url="{{ url_for('sell_preview', stock_id=holding.stock.id) }}">
-                            Sell       
+                                data-preview-url="{{ url_for('sell_preview', stock_id=holding.stock.id) }}"
+                                data-tick-url="{{ url_for('tick', stock_id=holding.stock.id) }}">
+                            Sell {{holding.stock.ticker}}  
                         </button>
                     </td>
                 </tr>
@@ -111,22 +107,32 @@
         <a href="{{ url_for('index') }}" class="btn btn-secondary">Home</a>
     </div>
     <div class="modal fade" id="sellModal" tabindex="-1" aria-labelledby="sellModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <form method="POST" id="sellForm" class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="sellModalLabel">Sell <span id="sellTicker"></span></h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <p>Current Stocks Owned:<strong>   <span id="sellShare"></span></strong></p>
-                    <label for="sellQuantity" class="form-label">Shares</label>
-                    <input type="number" class="form-control mb-3" id="sellQuantity" name="quantity" min="1" required>
-                    <table class="table table-sm mb-0">
-                        <tr><td>Current balance</td><td class="text-end">$<span id="sellCashNow"></span></td></tr>
-                        <tr><td>Price per share</td><td class="text-end">$<span id="sellPrice"></span></td></tr>
-                        <tr><td>Sale Amount</td><td class="text-end">$<span id="sellProceed">0.00</span></td></tr>
-                        <tr class="fw-bold"><td>Balance after</td><td class="text-end">$<span id="sellCashAfter"></span></td></tr>
-                    </table>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p>Current Stocks Owned:<strong>   <span id="sellShare"></span></strong></p>
+                            <label for="sellQuantity" class="form-label">Shares</label>
+                            <input type="number" class="form-control mb-3" id="sellQuantity" name="quantity" min="1" required>
+                            <table class="table table-sm mb-0">
+                                <tr><td>Current balance</td><td class="text-end">$<span id="sellCashNow"></span></td></tr>
+                                <tr><td>Price per share</td><td class="text-end">$<span id="sellPrice"></span></td></tr>
+                                <tr><td>Sale Amount</td><td class="text-end">$<span id="sellProceed">0.00</span></td></tr>
+                                <tr class="fw-bold"><td>Balance after</td><td class="text-end">$<span id="sellCashAfter"></span></td></tr>
+                                <tr><td>Gain per share</td><td class="text-end" id="sellGainPerShare"></td></tr>
+                                <tr class="fw-bold"><td>Total gain / loss</td><td class="text-end" id="sellTotalGain"></td></tr>
+                            </table>
+                        </div>
+                        <div class="col-md-6" id="sellStats">
+                            <div style="height: 180px"><canvas></canvas></div>
+                            {% include '_stock_stats.html' %}
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -136,30 +142,58 @@
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <script src="{{ url_for('static', filename='js/stock_stats.js') }}"></script>
+
 
     <script>
         const sellModal = document.getElementById('sellModal');
         let previewUrl = '';
 
-        //Runs when the popup opens, relatedTarget is the Sell button that was clicked
+        // Ask the server to tick every 3 seconds while the popup is open
+        const TICK_MS = 3000;
+        let tickTimer = null;
+        let tickUrl = '';
+
+        // Move the price, show the new stats, and recalculate the sale with the new price
+        async function tickPopup() {
+            const response = await fetch(tickUrl, {method: 'POST'});
+            showStats(document.getElementById('sellStats'), await response.json());
+            updateTotals();
+        }
+
+        // Runs when the popup opens, relatedTarget is the Sell button that was clicked
         sellModal.addEventListener('show.bs.modal', function (event) {
             const button = event.relatedTarget;
             previewUrl = button.dataset.previewUrl;
 
             document.getElementById('sellForm').action = button.dataset.url;
-            document.getElementById('sellQuantity').value = ''; //clear the last entry
-            updateTotals();
+            // Clear the last entry
+            document.getElementById('sellQuantity').value = '';
+            tickUrl = button.dataset.tickUrl;
+            tickPopup();
+            tickTimer = setInterval(tickPopup, TICK_MS);
         });
 
-        //Recalculate on every keystroke in the shares box
+        // Stop ticking as soon as the popup starts closing
+        sellModal.addEventListener('hide.bs.modal', () => clearInterval(tickTimer));
+
+        // Recalculate on every keystroke in the shares box
         document.getElementById('sellQuantity').addEventListener('input', updateTotals);
+
+        // Show an amount as +$1.23 in green or -$1.23 in red
+        function showGain(cell, amount) {
+            const up = parseFloat(amount) >= 0;
+            cell.textContent = (up ? '+' : '-') + '$' + amount.replace('-', '');
+            cell.className = 'text-end ' + (up ? 'text-success' : 'text-danger');
+        }
 
         async function updateTotals() {
             const quantity = parseInt(document.getElementById('sellQuantity').value) || 0;
             const response = await fetch(previewUrl + '?quantity=' + quantity);
             const data = await response.json();
 
-            //if they kept typing while we waited, a newer request will update the numbers instead
+            // If they kept typing while we waited, a newer request will update the numbers instead
             if ((parseInt(document.getElementById('sellQuantity').value) || 0) !== quantity) return;
 
             document.getElementById('sellTicker').textContent = data.ticker;
@@ -168,8 +202,10 @@
             document.getElementById('sellProceed').textContent = data.proceeds;
             document.getElementById('sellCashNow').textContent = data.cash_now;
             document.getElementById('sellCashAfter').textContent = data.cash_after;
+            showGain(document.getElementById('sellGainPerShare'), data.gain_per_share);
+            showGain(document.getElementById('sellTotalGain'), data.total_gain);
 
-            //turn "shares owned" red and block the Sell button if they don't own enough
+            // Turn "shares owned" red and block the Sell button if they don't own enough
             document.getElementById('sellShare').parentElement.classList.toggle('text-danger', quantity > data.shares_owned);
             document.getElementById('sellConfirm').disabled = !data.can_sell;
         }

@@ -37,26 +37,18 @@
                             data-tick-url="{{ url_for('tick', stock_id=stock.id) }}">
                             <div class="row p-3 bg-light">
                                 <div class="col-md-5">
-                                    <table class="table table-sm mb-3">
-                                        <tr><td>Change since launch</td><td class="text-end" data-stat="change">&mdash;</td></tr>
-                                        <tr><td>Launch price</td><td class="text-end" data-stat="initial_price">&mdash;</td></tr>
-                                        <tr><td>All-time high</td><td class="text-end" data-stat="all_time_high">&mdash;</td></tr>
-                                        <tr><td>All-time low</td><td class="text-end" data-stat="all_time_low">&mdash;</td></tr>
-                                        <tr><td>7-day high</td><td class="text-end" data-stat="week_high">&mdash;</td></tr>
-                                        <tr><td>7-day low</td><td class="text-end" data-stat="week_low">&mdash;</td></tr>
-                                        <tr><td>Market cap</td><td class="text-end" data-stat="market_cap">&mdash;</td></tr>
-                                        <tr><td>Shares available</td><td class="text-end" data-stat="available_shares">&mdash;</td></tr>                                        
-                                    </table>
+                                    {% include '_stock_stats.html' %}
                                     <button type="button" class="btn btn-success w-100"
                                             data-bs-toggle="modal" data-bs-target="#buyModal"
                                             data-url="{{ url_for('buy', stock_id=stock.id) }}"
-                                            data-preview-url="{{ url_for('buy_preview', stock_id=stock.id) }}">
+                                            data-preview-url="{{ url_for('buy_preview', stock_id=stock.id) }}"
+                                            data-stats-url="{{ url_for('stock_stats', stock_id=stock.id) }}">
                                         Buy {{ stock.ticker }}
                                     </button>
                                 </div>
                                 <div class="col-md-7">
                                     <div style="height: 260px">
-                                        <canvas id="chart-{{ stock.id }}"></canvas>
+                                        <canvas></canvas>
                                     </div>
                                 </div>
                             </div>
@@ -73,21 +65,29 @@
         <a href="{{ url_for('index') }}" class="btn btn-secondary">Home</a>
     </div>
     <div class="modal fade" id="buyModal" tabindex="-1" aria-labelledby="buyModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
             <form method="POST" id="buyForm" class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="buyModalLabel">Buy <span id="buyTicker"></span></h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <p>Current balance:<strong>   $<span id="buyCashNow"></span></strong></p>
-                    <label for="buyQuantity" class="form-label">Shares</label>
-                    <input type="number" class="form-control mb-3" id="buyQuantity" name="quantity" min="1" required>
-                    <table class="table table-sm mb-0">
-                        <tr><td>Price per share</td><td class="text-end">$<span id="buyPrice"></span></td></tr>
-                        <tr><td>Total cost</td><td class="text-end">$<span id="buyCost">0.00</span></td></tr>
-                        <tr class="fw-bold"><td>Balance after</td><td class="text-end">$<span id="buyCashAfter"></span></td></tr>
-                    </table>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p>Current balance:<strong>   $<span id="buyCashNow"></span></strong></p>
+                            <label for="buyQuantity" class="form-label">Shares</label>
+                            <input type="number" class="form-control mb-3" id="buyQuantity" name="quantity" min="1" required>
+                            <table class="table table-sm mb-0">
+                                <tr><td>Price per share</td><td class="text-end">$<span id="buyPrice"></span></td></tr>
+                                <tr><td>Total cost</td><td class="text-end">$<span id="buyCost">0.00</span></td></tr>
+                                <tr class="fw-bold"><td>Balance after</td><td class="text-end">$<span id="buyCashAfter"></span></td></tr>
+                            </table>
+                        </div>
+                        <div class="col-md-6" id="buyStats">
+                            <div style="height: 180px"><canvas></canvas></div>
+                            {% include '_stock_stats.html' %}
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -99,6 +99,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <script src="{{ url_for('static', filename='js/stock_stats.js') }}"></script>
 
 
     <script>
@@ -113,6 +114,7 @@
             document.getElementById('buyForm').action = button.dataset.url;
             document.getElementById('buyQuantity').value = ''; //clear the lsat entry
             updateTotals();
+            loadStats(button.dataset.statsUrl, document.getElementById('buyStats'));
         });
 
         // Recalculate on every keystroke in the shares box
@@ -148,77 +150,9 @@
             if (paused) return;
             const response = await fetch(details.dataset.tickUrl, {method: 'POST'});
             const data = await response.json();
+            // Update the price in the stocks main row, then its dropdown
+            document.getElementById('price-' + details.id.replace('details-', '')).textContent = data.price;
             showStats(details, data);
-        }
-
-        // One chart per stock, created the first time its dropdown loads, then updated each tick
-        const charts = {};
-        
-        function drawChart(stockId, history, up) {
-            // UTC from the server -> your local time
-            const labels = history.map(p => new Date(p.time).toLocaleString('en-US',
-                {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}));
-            const prices = history.map(p => parseFloat(p.price));
-            // Red and Green from Bootstrap
-            const color = up ? '#198754' : '#dc3545';
-            
-            // Swap in the new data and redraw
-            if (charts[stockId]) {
-                const chart = charts[stockId];
-                chart.data.labels = labels;
-                chart.data.datasets[0].data = prices;
-                chart.data.datasets[0].borderColor = color;
-                chart.update('none'); // Skips the animation
-                return;
-            }
-            
-            // First time: create the chart on the stocks canvas
-            charts[stockId] = new Chart(document.getElementById('chart-' + stockId), {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{data: prices, borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.2}],
-                },
-                options: {
-                    maintainAspectRatio: false,
-                    interaction: {mode: 'index', intersect: false},
-                    plugins: {legend: {display: false}},
-                    scales: {
-                        x: {ticks: {maxTicksLimit: 6}},
-                        y: {ticks: {callback: value => '$' + value}},
-                    },
-                },
-                
-            });
-
-        }
-
-
-
-        // Fill in this dropdown's stats and the price in its main row
-        function showStats(details, data) {
-            const stockId = details.id.replace('details-', '');
-            document.getElementById('price-' + stockId).textContent = data.price;
-
-            // The plain dollar amounts
-            for (const key of ['initial_price', 'all_time_high', 'all_time_low', 'week_high', 'week_low']) {
-                details.querySelector(`[data-stat="${key}"]`).textContent = '$' + data[key];
-            }
-
-            // Change since launch: green and + if up, red and - if down
-            const change = details.querySelector('[data-stat="change"]');
-            const up = parseFloat(data.change) >= 0;
-            const sign = up ? '+' : '-';
-            change.textContent = sign + '$' + data.change.replace('-', '') + ' (' + sign + data.change_pct.replace('-', '') + '%)';
-            change.className = 'text-end ' + (up ? 'text-success' : 'text-danger');
-
-            // Big numbers with commas, like 121,400,000
-            details.querySelector('[data-stat="market_cap"]').textContent = 
-                '$' + Number(data.market_cap).toLocaleString('en-US', {maximumFractionDigits: 0});
-            details.querySelector('[data-stat="available_shares"]').textContent = 
-                data.available_shares.toLocaleString('en-US') + ' / ' + data.shares_outstanding.toLocaleString('en-US');
-
-            drawChart(stockId, data.history, up);
         }
 
         // Start ticking when a dropdown opens, stop when it closes
