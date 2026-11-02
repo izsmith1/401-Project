@@ -126,11 +126,11 @@ def init_db():
     print("Database schema dropped and recreated. Now run: python seed_stocks.py")
 
 
-def log_event(user_id, event_type, details):
+def log_event(user_id, event_type, description):
     # Records one line in the event log (who did what, and when). We only add it to the
     # session here; it gets saved by the same db.session.commit() as the action that called
     # it, so if that action is rolled back the log line is dropped too.
-    db.session.add(EventLog(user_id=user_id, event_type=event_type, details=details))
+    db.session.add(EventLog(user_id=user_id, event_type=event_type, description=description))
 
 
 #User loader - required by Flask-Login
@@ -319,7 +319,7 @@ def buy(stock_id):
                                quantity=quantity, price=stock.current_price, amount=total_cost))
 
 # 4. log the event (saved by the same commit below)
-    log_event(user.id, 'BUY', f'Bought {quantity} {stock.ticker} at {stock.price}')
+    log_event(user.id, 'BUY', f'Bought {quantity} {stock.ticker} at {stock.current_price}')
 
 # Save all 3 changes together - if anything fails, none of them are saved
     try:
@@ -382,7 +382,7 @@ def sell(stock_id):
                                quantity=quantity, price=stock.current_price, amount=proceeds))
 
 # 4. log the event (saved by the same commit below)
-    log_event(user.id, 'SELL', f'Sold {quantity} {stock.ticker} at {stock.price}')
+    log_event(user.id, 'SELL', f'Sold {quantity} {stock.ticker} at {stock.current_price}')
 
 # Save all 3 changes together
     try:
