@@ -1,20 +1,21 @@
-import sys, random
+import sys
+import random
+from datetime import datetime, timezone, timedelta, time, date
+from decimal import Decimal
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import SQLAlchemyError
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
-from datetime import datetime, timezone, timedelta, time, date
-from decimal import Decimal  # use Decimal for money, floats cause rounding errors
-
 
 def utc_now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-
 app = Flask(__name__)
 bcrypt = Bcrypt(app)
 
-app.config.from_object("config")  # DB login and secret key live in config.py (gitignored)
+# DB login and secret key live in config.py (gitignored)
+app.config.from_object("config")  
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
@@ -32,7 +33,8 @@ class User(UserMixin, db.Model):
     last_name = db.Column(db.String(255))
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
-    cash_balance = db.Column(db.Numeric(10, 2), default=Decimal("10000.00"), nullable=False)  # starting money
+    # Starting money
+    cash_balance = db.Column(db.Numeric(10, 2), default=Decimal("10000.00"), nullable=False)  
     created_at = db.Column(db.DateTime, default=utc_now, nullable=False)
     holdings = db.relationship("Holding", backref="user", lazy=True)
     transactions = db.relationship("Transaction", backref="user", lazy=True)
@@ -130,14 +132,13 @@ class MarketSchedule(db.Model):
     # Admin who set it
     updated_by = db.Column(db.Integer, db.ForeignKey("administrators.admin_id"), nullable=True)
 
-with app.app_context():
-    db.create_all()
-
+# Drops all tables and rows (Uncomment db.drop_all to drop all tables and rows)
+# python app.py --init-db
 def init_db():
     with app.app_context():
-        db.drop_all()
+#        db.drop_all()
         db.create_all()
-    print("Database schema dropped and recreated. Now run: python seed_stocks.py")
+    print("Database schema dropped and recreated. Now run: python seed_stocks.py") 
 
 def log_event(user_id, event_type, description):
     # Records one line in the event log (who did what, and when). We only add it to the
@@ -146,6 +147,33 @@ def log_event(user_id, event_type, description):
     db.session.add(
         EventLog(user_id=user_id, event_type=event_type, description=description)
     )
+
+def record_trade(user_id, stock, quantity, transaction_type, amount):
+    db.session.add(
+        Transaction(
+            user_id=user_id,
+            stock_id=stock.id,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            price=stock.current_price,
+            amount=amount
+        )
+    )
+
+def positive_quantity(values):
+    quantity = values.get("quantity", default=0, type=int)
+    return quantity if quantity > 0 else 0 
+
+def commit_trade(success_message):
+    try:
+        db.session.commit()
+        flash(success_message, "success")
+        return True
+    except SQLAlchemyError as error:
+        db.session.rollback()
+        app.logger.exception("Trade failed", exc_info=error)
+        flash("Trade failed, please try again", "error")
+        return False
 
 # Default market window used when no per-date override row exists.
 DEFAULT_OPEN = time(9, 0)
@@ -173,25 +201,45 @@ def is_market_open():
 # User loader - required by Flask-Login
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        hashed_password = bcrypt.generate_password_hash(
-            request.form.get("password")).decode("utf-8")
+        username=request.form.get("username", "").strip()
+        email=request.form.get("email", "").strip()
+        first_name=request.form.get("first_name", "").strip()
+        last_name=request.form.get("last_name", "").strip()
+        password = request.form.get("password", "")
+
+        if not username or not email or not password:
+            flash("Username, email, and password are required", "error")
+            return render_template("add_user.html")       
+
+        existing_user = User.query.filter(
+            db.or_(User.username == username, User.email == email)
+        ).first()
+
+        if existing_user:
+            flash("Username or email already exists", "error")
+            return render_template("add_user.html")
+
+        hashed_password = bcrypt.generate_password_hash(password).decode("utf-8")        
+        
         user = User(
-            username=request.form.get("username"),
-            email=request.form.get("email"),
-            first_name=request.form.get("first_name"),
-            last_name=request.form.get("last_name"),
+            username=username,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
             password_hash=hashed_password,
         )
         db.session.add(user)
         # Assigns user.id so we can log who was created
         db.session.flush()
+        
         log_event(user.id, "ACCOUNT_CREATED", f"Account created for {user.username}")
         db.session.commit()
+        
         flash("User registered successfully!", "success")
         return redirect(url_for("login"))
 
@@ -231,8 +279,10 @@ def index():
 @login_required
 def portfolio():
     holdings = (
-        Holding.query.filter_by(user_id=current_user.id)
+        Holding.query
+        .filter_by(user_id=current_user.id)
         .filter(Holding.quantity > 0)
+        .options(db.joinedload(Holding.stock))
         .all()
     )
     transactions = (
@@ -240,7 +290,14 @@ def portfolio():
         .order_by(Transaction.transaction_date.desc())
         .all()
     )
-    stock_value = sum(h.quantity * h.stock.current_price for h in holdings)
+    stock_value = sum(
+        (
+            holding.quantity * holding.stock.current_price
+            for holding in holdings
+            if holding.stock is not None
+        ),
+        Decimal("0.00"),
+    )
     return render_template("portfolio.html", holdings=holdings, transactions=transactions, 
                            stock_value=stock_value, market_open=is_market_open())
 
@@ -302,14 +359,16 @@ def build_stats(stock):
 @app.route("/stocks/<int:stock_id>/stats")
 @login_required
 def stock_stats(stock_id):
-    stock = Stock.query.get_or_404(stock_id)
+    stock = db.session.get(Stock, stock_id)
+    if stock is None:
+        abort(404, description="Stock not found")
     return jsonify(build_stats(stock))
 
 
 # A stock can move at most once every 2 seconds, no matter how many people are watching
 MIN_TICK_SECONDS = 2
 # Each tick moves the price up to 1% up or down
-MAX_TICK_CHANGE = 0.01
+MAX_TICK_CHANGE_PERCENT = 1
 
 
 # TICK - Randomly move a stock's price (called every few seconds while its dropdown is open
@@ -324,9 +383,9 @@ def tick(stock_id):
 
     # Lock the stock row so two viewers ticking at the same moment can't both move it
     stock = Stock.query.with_for_update().get_or_404(stock_id)
-
     last = (
-        PriceHistory.query.filter_by(stock_id=stock.id)
+        db.session.query(PriceHistory)
+        .filter(PriceHistory.stock_id == stock.id)
         .order_by(PriceHistory.timestamp.desc())
         .first()
     )
@@ -335,11 +394,13 @@ def tick(stock_id):
     if last is None or utc_now() - last.timestamp >= timedelta(
         seconds=MIN_TICK_SECONDS
     ):
-        change = Decimal(str(random.uniform(-MAX_TICK_CHANGE, MAX_TICK_CHANGE)))
+        basis_points = random.randint(-100, 100)  # -1% to +1%
+        change = Decimal(basis_points) / Decimal("10000")
+
+        new_price = stock.current_price * (Decimal("1") + change)
         stock.current_price = max(
-            (stock.current_price * (1 + change)).quantize(Decimal("0.01")),
-            Decimal("0.01"),
-        )
+            new_price.quantize(Decimal("0.01")), Decimal("0.01")
+        ) 
         db.session.add(PriceHistory(stock_id=stock.id, price=stock.current_price))
 
     # Saves the new price and releases the lock (even if nothing changed)
@@ -351,8 +412,10 @@ def tick(stock_id):
 @app.route("/buy/<int:stock_id>/preview")
 @login_required
 def buy_preview(stock_id):
-    stock = Stock.query.get_or_404(stock_id)
-    quantity = request.args.get("quantity", default=0, type=int)
+    stock = db.session.get(Stock, stock_id)
+    if stock is None:
+        abort(404, description="Stock not found")
+    quantity = positive_quantity(request.args)
     cost = stock.current_price * quantity
     cash_after = current_user.cash_balance - cost
 
@@ -375,17 +438,20 @@ def buy(stock_id):
         flash("The market is closed", "error")
         return redirect(url_for("stocks"))
 
-    quantity = request.form.get("quantity", type=int)
+    quantity = positive_quantity(request.form)
 
-    # Validate input
-    if not quantity or quantity <= 0:
+    if quantity == 0:
         flash("Enter a valid number of shares", "error")
         return redirect(url_for("stocks"))
 
-    stock = Stock.query.with_for_update().get_or_404(stock_id)
+    stock = db.session.get(Stock, stock_id, with_for_update=True)
+    if stock is None:
+        abort(404, description="Stock not found")
 
     # Lock the user's row so two trades at once can't both spend the same cash
-    user = User.query.with_for_update().get(current_user.id)
+    user = db.session.get(User, current_user.id, with_for_update=True)
+    if user is None:
+        abort(404, description="User not found")
     total_cost = stock.current_price * quantity
 
     if user.cash_balance < total_cost:
@@ -402,23 +468,20 @@ def buy(stock_id):
     stock.shares_available -= quantity
 
     # 2. add the shares (create a holding row if this is the first time buying)
-    holding = Holding.query.filter_by(user_id=user.id, stock_id=stock.id).first()
+    holding = db.session.query(Holding).filter(Holding.user_id == user.id, Holding.stock_id == stock.id).first()
     if holding:
         holding.quantity += quantity
     else:
         db.session.add(Holding(user_id=user.id, stock_id=stock.id, quantity=quantity))
 
     # 3. record the transaction
-    db.session.add(
-        Transaction(
+    record_trade(
             user_id=user.id,
-            stock_id=stock.id,
-            transaction_type="BUY",
+            stock=stock,
             quantity=quantity,
-            price=stock.current_price,
+            transaction_type="BUY",
             amount=total_cost,
         )
-    )
 
     # 4. log the event (saved by the same commit below)
     log_event(
@@ -426,19 +489,15 @@ def buy(stock_id):
     )
 
     # Save everything together - if anything fails, none of them are saved
-    try:
-        db.session.commit()
-        flash(f"Bought {quantity} shares of {stock.ticker}", "success")
-    except Exception:
-        db.session.rollback()
-        flash("Trade failed, please try again", "error")
+    commit_trade(f"Bought {quantity} shares of {stock.ticker}")
 
     return redirect(url_for("portfolio"))
 
 # Average price paid per share for the shares the user still owns
 def average_cost(user_id, stock_id):
     trades = (
-        Transaction.query.filter_by(user_id=user_id, stock_id=stock_id)
+        db.session.query(Transaction)
+        .filter(Transaction.user_id == user_id, Transaction.stock_id == stock_id)
         .order_by(Transaction.id)
         .all()
     )
@@ -461,10 +520,12 @@ def average_cost(user_id, stock_id):
 @app.route("/sell/<int:stock_id>/preview")
 @login_required
 def sell_preview(stock_id):
-    stock = Stock.query.get_or_404(stock_id)
-    quantity = request.args.get("quantity", default=0, type=int)
-    holding = Holding.query.filter_by(
-        user_id=current_user.id, stock_id=stock.id
+    stock = db.session.get(Stock, stock_id)
+    if stock is None:
+        abort(404, description="Stock not found")
+    quantity = positive_quantity(request.args)
+    holding = db.session.query(Holding).filter(
+        Holding.user_id == current_user.id, Holding.stock_id == stock.id
     ).first()
     owned = holding.quantity if holding else 0
     proceeds = stock.current_price * quantity
@@ -493,19 +554,24 @@ def sell(stock_id):
         flash("The market is closed", "error")
         return redirect(url_for("portfolio"))
 
-    quantity = request.form.get("quantity", type=int)
+    quantity = positive_quantity(request.form)
 
     # Validate input
-    if not quantity or quantity <= 0:
+    if quantity == 0:
         flash("Enter a valid number of shares", "error")
         return redirect(url_for("portfolio"))
 
-    stock = Stock.query.with_for_update().get_or_404(stock_id)
+    stock = db.session.get(Stock, stock_id)
+    if stock is None:
+        abort(404, description="Stock not found")
 
     # Lock the user's row and holding so the same shares can't be sold twice
-    user = User.query.with_for_update().get(current_user.id)
+    user = db.session.get(User, current_user.id)
+    if user is None:
+        abort(404, description="User not found")
     holding = (
-        Holding.query.filter_by(user_id=user.id, stock_id=stock.id)
+        db.session.query(Holding)
+        .filter(Holding.user_id == user.id, Holding.stock_id == stock.id)
         .with_for_update()
         .first()
     )
@@ -523,16 +589,13 @@ def sell(stock_id):
     user.cash_balance += proceeds
 
     # 3. Record the transaction
-    db.session.add(
-        Transaction(
+    record_trade(
             user_id=user.id,
-            stock_id=stock.id,
-            transaction_type="SELL",
+            stock=stock,
             quantity=quantity,
-            price=stock.current_price,
+            transaction_type="SELL",
             amount=proceeds,
         )
-    )
 
     # 4. log the event (saved by the same commit below)
     log_event(
@@ -540,15 +603,9 @@ def sell(stock_id):
     )
 
     # Save everything together
-    try:
-        db.session.commit()
-        flash(f"Sold {quantity} shares of {stock.ticker}", "success")
-    except Exception:
-        db.session.rollback()
-        flash("Trade failed, please try again", "error")
+    commit_trade(f"Sold {quantity} shares of {stock.ticker}")
 
     return redirect(url_for("portfolio"))
-
 
 # ADMIN - Manage per-date market schedule overrides (special hours and holidays)
 @app.route("/admin/schedule", methods=["GET", "POST"])
@@ -642,7 +699,6 @@ def admin_delete_schedule(id):
         flash("Could not remove the entry, please try again", "error")
 
     return redirect(url_for("admin_schedule"))
-
 
 if __name__ == "__main__":
     if "--init-db" in sys.argv:
