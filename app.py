@@ -1,9 +1,9 @@
 import sys, random
-from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time, date
 from decimal import Decimal  # use Decimal for money, floats cause rounding errors
 
 
@@ -146,6 +146,28 @@ def log_event(user_id, event_type, description):
         EventLog(user_id=user_id, event_type=event_type, description=description)
     )
 
+# Default market window used when no per-date override row exists.
+DEFAULT_OPEN = time(9, 0)
+DEFAULT_CLOSE = time(17, 0)
+DEFAULT_TRADING_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri
+
+def is_market_open():
+    # Plain server-local time, no timezone machinery (student-project style).
+    now = datetime.now()
+    today = now.date()
+
+    # A per-date row (holiday or special hours) overrides the weekly default.
+    override = MarketSchedule.query.filter_by(schedule_date=today).first()
+    if override is not None:
+        if override.is_closed or override.open_time is None or override.close_time is None:
+            return False
+        return override.open_time <= now.time() < override.close_time
+
+    # No override: fall back to the default weekday window.
+    if now.weekday() not in DEFAULT_TRADING_WEEKDAYS:
+        return False
+    return DEFAULT_OPEN <= now.time() < DEFAULT_CLOSE
+
 # User loader - required by Flask-Login
 @login_manager.user_loader
 def load_user(user_id):
@@ -224,7 +246,7 @@ def portfolio():
 @app.route("/stocks")
 @login_required
 def stocks():
-    return render_template("stocks.html", stocks=Stock.query.all())
+    return render_template("stocks.html", stocks=Stock.query.all(), market_open=is_market_open())
 
 
 # How many recent prices to send for the graph
@@ -294,6 +316,11 @@ MAX_TICK_CHANGE = 0.01
 def tick(stock_id):
     # Lock the stock row so two viewers ticking at the same moment can't both move it
     stock = Stock.query.with_for_update().get_or_404(stock_id)
+
+    # Market closed: don't move the price or add a PriceHistory row, just return current stats
+    if not is_market_open():
+        return jsonify(build_stats(stock))
+
     last = (
         PriceHistory.query.filter_by(stock_id=stock.id)
         .order_by(PriceHistory.timestamp.desc())
@@ -339,6 +366,11 @@ def buy_preview(stock_id):
 @app.route("/buy/<int:stock_id>", methods=["POST"])
 @login_required
 def buy(stock_id):
+    # Market closed: reject the order and change nothing
+    if not is_market_open():
+        flash("The market is closed", "error")
+        return redirect(url_for("stocks"))
+
     quantity = request.form.get("quantity", type=int)
 
     # Validate input
@@ -452,6 +484,11 @@ def sell_preview(stock_id):
 @app.route("/sell/<int:stock_id>", methods=["POST"])
 @login_required
 def sell(stock_id):
+    # Market closed: reject the order and change nothing
+    if not is_market_open():
+        flash("The market is closed", "error")
+        return redirect(url_for("portfolio"))
+
     quantity = request.form.get("quantity", type=int)
 
     # Validate input
@@ -507,6 +544,88 @@ def sell(stock_id):
         flash("Trade failed, please try again", "error")
 
     return redirect(url_for("portfolio"))
+
+
+# ADMIN - Manage per-date market schedule overrides (special hours and holidays)
+@app.route("/admin/schedule", methods=["GET", "POST"])
+@login_required
+def admin_schedule():
+    if not current_user.is_admin:
+        abort(403)
+
+    if request.method == "POST":
+        # Parse the target date
+        try:
+            schedule_date = datetime.strptime(
+                request.form.get("schedule_date", ""), "%Y-%m-%d"
+            ).date()
+        except ValueError:
+            flash("Enter a valid date", "error")
+            return redirect(url_for("admin_schedule"))
+
+        is_closed = request.form.get("is_closed") == "on"
+        open_time = None
+        close_time = None
+
+        # Open dates need both times, and close must be later than open
+        if not is_closed:
+            try:
+                open_time = datetime.strptime(
+                    request.form.get("open_time", ""), "%H:%M"
+                ).time()
+                close_time = datetime.strptime(
+                    request.form.get("close_time", ""), "%H:%M"
+                ).time()
+            except ValueError:
+                flash("Enter valid open and close times", "error")
+                return redirect(url_for("admin_schedule"))
+
+            if close_time <= open_time:
+                flash("Close time must be later than open time", "error")
+                return redirect(url_for("admin_schedule"))
+
+        # Upsert the row for that date (update existing or create new)
+        row = MarketSchedule.query.filter_by(schedule_date=schedule_date).first()
+        if row is None:
+            row = MarketSchedule(schedule_date=schedule_date)
+            db.session.add(row)
+        row.open_time = open_time
+        row.close_time = close_time
+        row.is_closed = is_closed
+        row.updated_by = current_user.admin.id if current_user.admin else None
+
+        try:
+            db.session.commit()
+            flash("Schedule saved", "success")
+        except Exception:
+            db.session.rollback()
+            flash("Could not save the schedule, please try again", "error")
+
+        return redirect(url_for("admin_schedule"))
+
+    return render_template(
+        "admin_schedule.html",
+        schedules=MarketSchedule.query.order_by(MarketSchedule.schedule_date).all(),
+    )
+
+
+# ADMIN - Remove a per-date schedule override (falls back to the default window)
+@app.route("/admin/schedule/<int:id>/delete", methods=["POST"])
+@login_required
+def admin_delete_schedule(id):
+    if not current_user.is_admin:
+        abort(403)
+
+    row = MarketSchedule.query.get_or_404(id)
+    db.session.delete(row)
+    try:
+        db.session.commit()
+        flash("Schedule entry removed", "success")
+    except Exception:
+        db.session.rollback()
+        flash("Could not remove the entry, please try again", "error")
+
+    return redirect(url_for("admin_schedule"))
 
 
 if __name__ == "__main__":
