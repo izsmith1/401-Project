@@ -18,19 +18,19 @@
             <div class="col">
                 <div class="card"><div class="card-body">
                     <h6 class="card-subtitle text-muted">Cash</h6>
-                    <h4>${{ "%.2f"|format(current_user.cash_balance) }}</h4>
+                    <h4>${{ "{:,.2f}".format(current_user.cash_balance) }}</h4>
                 </div></div>
             </div>
             <div class="col">
                 <div class="card"><div class="card-body">
                     <h6 class="card-subtitle text-muted">Stock Value</h6>
-                    <h4>${{ "%.2f"|format(stock_value) }}</h4>
+                    <h4>${{ "{:,.2f}".format(stock_value) }}</h4>
                 </div></div>
             </div>
             <div class="col">
                 <div class="card"><div class="card-body">
                     <h6 class="card-subtitle text-muted">Total</h6>
-                    <h4>${{ "%.2f"|format(current_user.cash_balance + stock_value) }}</h4>
+                    <h4>${{ "{:,.2f}".format(current_user.cash_balance + stock_value) }}</h4>
                 </div></div>
             </div>
         </div>
@@ -54,8 +54,8 @@
                     <td>{{ holding.stock.ticker }}</td>
                     <td>{{ holding.stock.company_name }}</td>
                     <td>{{ holding.quantity }}</td>
-                    <td>${{ "%.2f"|format(holding.stock.current_price) }}</td>
-                    <td>${{ "%.2f"|format(holding.quantity * holding.stock.current_price) }}</td>
+                    <td>${{ "{:,.2f}".format(holding.stock.current_price) }}</td>
+                    <td>${{ "{:,.2f}".format(holding.quantity * holding.stock.current_price) }}</td>
                     <td>
                         <button type="button" class="btn btn-danger"
                                 data-bs-toggle="modal" data-bs-target="#sellModal"
@@ -93,8 +93,8 @@
                     <td><span class="badge {{ 'bg-success' if t.transaction_type == 'BUY' else 'bg-danger' }}">{{ t.transaction_type }}</span></td>
                     <td>{{ t.stock.ticker if t.stock else '—' }}</td>
                     <td>{{ t.quantity if t.stock else '—' }}</td>
-                    <td>{{ "$%.2f"|format(t.price) if t.price is not none else '—' }}</td>
-                    <td>${{ "%.2f"|format(t.amount) }}</td>
+                    <td>{{ "${:,.2f}".format(t.price) if t.price is not none else '—' }}</td>
+                    <td>${{ "{:,.2f}".format(t.amount) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -117,8 +117,13 @@
                     <div class="row">
                         <div class="col-md-6">
                             <p>Current Stocks Owned:<strong>   <span id="sellShare"></span></strong></p>
-                            <label for="sellQuantity" class="form-label">Shares</label>
-                            <input type="number" class="form-control mb-3" id="sellQuantity" name="quantity" min="1" required>
+                            {% if not market_open %}
+                            <div class="alert alert-warning">The market is closed. Selling reopens when the market opens.</div>
+                            {% endif %}
+                            <div class="{{ '' if market_open else 'd-none' }}">
+                                <label for="sellQuantity" class="form-label">Shares</label>
+                                <input type="number" class="form-control mb-3" id="sellQuantity" name="quantity" min="1" required>
+                            </div>
                             <table class="table table-sm mb-0">
                                 <tr><td>Current balance</td><td class="text-end">$<span id="sellCashNow"></span></td></tr>
                                 <tr><td>Price per share</td><td class="text-end">$<span id="sellPrice"></span></td></tr>
@@ -136,7 +141,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-danger" id="sellConfirm">Sell</button>
+                    <button type="submit" class="btn btn-danger {{ '' if market_open else 'd-none' }}" id="sellConfirm">Sell</button>
                 </div>
             </form>
         </div>
@@ -187,7 +192,7 @@
         // Show an amount as +$1.23 in green or -$1.23 in red
         function showGain(cell, amount) {
             const up = parseFloat(amount) >= 0;
-            cell.textContent = (up ? '+' : '-') + '$' + amount.replace('-', '');
+            cell.textContent = (up ? '+' : '-') + '$' + money(Math.abs(amount));
             cell.className = 'text-end ' + (up ? 'text-success' : 'text-danger');
         }
 
@@ -200,11 +205,11 @@
             if ((parseInt(document.getElementById('sellQuantity').value) || 0) !== quantity) return;
 
             document.getElementById('sellTicker').textContent = data.ticker;
-            document.getElementById('sellPrice').textContent = data.price;
-            document.getElementById('sellShare').textContent = data.shares_owned;
-            document.getElementById('sellProceed').textContent = data.proceeds;
-            document.getElementById('sellCashNow').textContent = data.cash_now;
-            document.getElementById('sellCashAfter').textContent = data.cash_after;
+            document.getElementById('sellPrice').textContent = money(data.price);
+            document.getElementById('sellShare').textContent = Number(data.shares_owned).toLocaleString('en-US');
+            document.getElementById('sellProceed').textContent = money(data.proceeds);
+            document.getElementById('sellCashNow').textContent = money(data.cash_now);
+            document.getElementById('sellCashAfter').textContent = money(data.cash_after);
             showGain(document.getElementById('sellGainPerShare'), data.gain_per_share);
             showGain(document.getElementById('sellTotalGain'), data.total_gain);
 

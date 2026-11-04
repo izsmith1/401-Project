@@ -69,6 +69,11 @@ function showStats(container, data) {
     drawChart(container.querySelector('canvas'), data.history, up);
 }
 
+// Dollar amounts with commas and 2 decimals, like 12,345.67
+function money(value) {
+    return Number(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
 // Get a stock's stats without moving its price, then show them in a popup
 async function loadStats(url, container) {
     const response = await fetch(url);
