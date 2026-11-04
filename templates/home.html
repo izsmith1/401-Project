@@ -17,6 +17,9 @@
                     {% if current_user.is_authenticated %}
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('stocks') }}">Stocks</a></li>
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('portfolio') }}">Portfolio</a></li>
+                        {% if current_user.is_admin %}
+                        <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_schedule') }}">Admin Panel</a></li>
+                        {% endif %}
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
                     {% else %}
                     <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
@@ -37,7 +40,7 @@
         {% endwith %}
 
         {% if current_user.is_authenticated %}
-            <h1>Welcome, {{ current_user.username }}!</h1>
+            <h1>Welcome, {{ current_user.first_name }}!</h1>
             <p class="lead">Cash available: <strong>${{ "%.2f"|format(current_user.cash_balance) }}</strong></p>
 
             {% if current_user.is_admin %}

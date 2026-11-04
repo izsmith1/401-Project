@@ -110,6 +110,7 @@ class EventLog(db.Model):
     # Nullable for system events
     user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=True)
     # ACCOUNT_CREATED | BUY | SELL | DEPOSIT | WITHDRAW | PRICE_UPDATE_ERROR
+    # | MARKET_CLOSED | MARKET_HOURS_SET | SCHEDULE_REMOVED
     event_type = db.Column(db.String(100), nullable=False)
     # Summary for Auditing from admins
     description = db.Column(db.String(255), nullable=False)
@@ -149,7 +150,8 @@ def log_event(user_id, event_type, description):
 # Default market window used when no per-date override row exists.
 DEFAULT_OPEN = time(9, 0)
 DEFAULT_CLOSE = time(17, 0)
-DEFAULT_TRADING_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri
+# Mon-Fri
+DEFAULT_TRADING_WEEKDAYS = {0, 1, 2, 3, 4}
 
 def is_market_open():
     # Plain server-local time, no timezone machinery (student-project style).
@@ -239,7 +241,8 @@ def portfolio():
         .all()
     )
     stock_value = sum(h.quantity * h.stock.current_price for h in holdings)
-    return render_template("portfolio.html", holdings=holdings, transactions=transactions, stock_value=stock_value)
+    return render_template("portfolio.html", holdings=holdings, transactions=transactions, 
+                           stock_value=stock_value, market_open=is_market_open())
 
 
 # READ - List all stocks with buy forms
@@ -314,12 +317,13 @@ MAX_TICK_CHANGE = 0.01
 @app.route("/stocks/<int:stock_id>/tick", methods=["POST"])
 @login_required
 def tick(stock_id):
-    # Lock the stock row so two viewers ticking at the same moment can't both move it
-    stock = Stock.query.with_for_update().get_or_404(stock_id)
-
     # Market closed: don't move the price or add a PriceHistory row, just return current stats
     if not is_market_open():
+        stock = Stock.query.get_or_404(stock_id)
         return jsonify(build_stats(stock))
+
+    # Lock the stock row so two viewers ticking at the same moment can't both move it
+    stock = Stock.query.with_for_update().get_or_404(stock_id)
 
     last = (
         PriceHistory.query.filter_by(stock_id=stock.id)
@@ -594,6 +598,13 @@ def admin_schedule():
         row.is_closed = is_closed
         row.updated_by = current_user.admin.id if current_user.admin else None
 
+        # Record who changed the schedule, saved by the same commit below
+        if is_closed:
+            log_event(current_user.id, "MARKET_CLOSED", f"Market scheduled for close on {schedule_date}")
+        else:
+            log_event(current_user.id, "MARKET_HOURS_SET", 
+                      F"Market hours on {schedule_date} set to {open_time:%H:%M}-{close_time:%H:%M}",
+            )
         try:
             db.session.commit()
             flash("Schedule saved", "success")
@@ -618,6 +629,11 @@ def admin_delete_schedule(id):
 
     row = MarketSchedule.query.get_or_404(id)
     db.session.delete(row)
+    log_event(
+        current_user.id,
+        "SCHEDULE_REMOVED",
+        f"Schedule override for {row.schedule_date} removed (back to default hours)",
+    )
     try:
         db.session.commit()
         flash("Schedule entry removed", "success")

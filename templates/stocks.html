@@ -143,6 +143,8 @@
         }
         // Ask the server to tick every 3 seconds
         const TICK_MS = 3000;
+        // Comes from app.py so the page knows whether to keep ticking
+        const MARKET_OPEN = JSON.parse('{{ market_open|tojson}}')
         // The running timer for each open dropdown, keyed by its id
         const tickTimers = {};
         // True while the Buy popup is open
@@ -163,7 +165,9 @@
             details.addEventListener('show.bs.collapse', function () {
                 // Once right away so the stats don't sit on dashes for 3 seconds
                 tickStock(details); 
-                tickTimers[details.id] = setInterval(() => tickStock(details), TICK_MS);
+                if (MARKET_OPEN) {
+                    tickTimers[details.id] = setInterval(() => tickStock(details), TICK_MS);
+                }
             });
             details.addEventListener('hide.bs.collapse', function () {
                 clearInterval(tickTimers[details.id]);

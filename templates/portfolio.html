@@ -152,6 +152,7 @@
 
         // Ask the server to tick every 3 seconds while the popup is open
         const TICK_MS = 3000;
+        const MARKET_OPEN = JSON.parse('{{ market_open|tojson}}')     
         let tickTimer = null;
         let tickUrl = '';
 
@@ -172,7 +173,9 @@
             document.getElementById('sellQuantity').value = '';
             tickUrl = button.dataset.tickUrl;
             tickPopup();
-            tickTimer = setInterval(tickPopup, TICK_MS);
+            if (MARKET_OPEN) {
+                tickTimer = setInterval(tickPopup, TICK_MS);
+            }
         });
 
         // Stop ticking as soon as the popup starts closing
