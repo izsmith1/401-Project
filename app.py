@@ -1,7 +1,7 @@
 import sys
 import random
 from datetime import datetime, timezone, timedelta, time, date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
@@ -699,6 +699,87 @@ def admin_delete_schedule(id):
         flash("Could not remove the entry, please try again", "error")
 
     return redirect(url_for("admin_schedule"))
+
+
+# ADMIN - Create new stocks for customers to trade
+@app.route("/admin/stocks", methods=["GET", "POST"])
+@login_required
+def admin_stocks():
+    if not current_user.is_admin:
+        abort(403)
+
+    if request.method == "POST":
+        company_name = request.form.get("company_name", "").strip()
+        ticker = request.form.get("ticker", "").strip()
+
+        # Company name and ticker must be present
+        if not company_name:
+            flash("Company name is required", "error")
+            return redirect(url_for("admin_stocks"))
+        if not ticker:
+            flash("Ticker is required", "error")
+            return redirect(url_for("admin_stocks"))
+
+        # Shares outstanding must be a whole number greater than 0
+        try:
+            shares_outstanding = int(request.form.get("shares_outstanding", ""))
+        except (ValueError, TypeError):
+            flash("Shares outstanding must be a whole number", "error")
+            return redirect(url_for("admin_stocks"))
+        if shares_outstanding <= 0:
+            flash("Shares outstanding must be greater than 0", "error")
+            return redirect(url_for("admin_stocks"))
+
+        # Initial price must be a sensible money value greater than 0
+        try:
+            price = Decimal(request.form.get("initial_price", "")).quantize(
+                Decimal("0.01")
+            )
+        except (InvalidOperation, ValueError):
+            flash("Initial price must be a valid price", "error")
+            return redirect(url_for("admin_stocks"))
+        if price <= Decimal("0"):
+            flash("Initial price must be greater than 0", "error")
+            return redirect(url_for("admin_stocks"))
+
+        # Reject a case-insensitive duplicate ticker
+        existing = Stock.query.filter(
+            db.func.upper(Stock.ticker) == ticker.upper()
+        ).first()
+        if existing is not None:
+            flash(f"A stock with ticker {ticker.upper()} already exists", "error")
+            return redirect(url_for("admin_stocks"))
+
+        ticker = ticker.upper()
+        stock = Stock(
+            company_name=company_name,
+            ticker=ticker,
+            shares_outstanding=shares_outstanding,
+            shares_available=shares_outstanding,
+            initial_price=price,
+            current_price=price,
+            created_by=current_user.admin.id if current_user.admin else None,
+        )
+        db.session.add(stock)
+        # Assigns stock.id so we can attach the first price history row
+        db.session.flush()
+
+        db.session.add(PriceHistory(stock_id=stock.id, price=price))
+        log_event(current_user.id, "STOCK_CREATED", f"Created stock {ticker} at {price}")
+
+        try:
+            db.session.commit()
+            flash(f"Stock {ticker} created", "success")
+        except Exception:
+            db.session.rollback()
+            flash("Could not create the stock, please try again", "error")
+
+        return redirect(url_for("admin_stocks"))
+
+    return render_template(
+        "admin_stocks.html",
+        stocks=Stock.query.order_by(Stock.ticker).all(),
+    )
 
 if __name__ == "__main__":
     if "--init-db" in sys.argv:
