@@ -607,6 +607,105 @@ def sell(stock_id):
 
     return redirect(url_for("portfolio"))
 
+
+# Validate a money amount from a form: parses as Decimal, > 0, at most two decimals.
+# Returns (amount, None) on success or (None, error_message) on failure.
+def validate_amount(raw):
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError, TypeError):
+        return None, "Enter a valid amount"
+    if amount <= 0:
+        return None, "Amount must be greater than 0"
+    if amount != amount.quantize(Decimal("0.01")):
+        return None, "Amount can have at most two decimal places"
+    return amount, None
+
+
+# CASH - Show the deposit / withdraw page
+@app.route("/cash")
+@login_required
+def cash():
+    return render_template("cash.html")
+
+
+# DEPOSIT - Add cash to the user's balance
+@app.route("/deposit", methods=["POST"])
+@login_required
+def deposit():
+    amount, error = validate_amount(request.form.get("amount", ""))
+    if error:
+        flash(error, "error")
+        return redirect(url_for("cash"))
+
+    # Lock the user's row so two cash changes at once can't clobber each other
+    user = db.session.get(User, current_user.id, with_for_update=True)
+    if user is None:
+        abort(404, description="User not found")
+
+    user.cash_balance += amount
+    db.session.add(
+        Transaction(
+            user_id=user.id,
+            stock_id=None,
+            transaction_type="DEPOSIT",
+            quantity=0,
+            price=None,
+            amount=amount,
+        )
+    )
+    log_event(user.id, "DEPOSIT", f"Deposited {amount}")
+
+    try:
+        db.session.commit()
+        flash(f"Deposited ${amount}", "success")
+    except Exception:
+        db.session.rollback()
+        flash("Could not complete the deposit, please try again", "error")
+
+    return redirect(url_for("cash"))
+
+
+# WITHDRAW - Take cash out of the user's balance
+@app.route("/withdraw", methods=["POST"])
+@login_required
+def withdraw():
+    amount, error = validate_amount(request.form.get("amount", ""))
+    if error:
+        flash(error, "error")
+        return redirect(url_for("cash"))
+
+    # Lock the user's row before checking the balance so two withdrawals can't both pass
+    user = db.session.get(User, current_user.id, with_for_update=True)
+    if user is None:
+        abort(404, description="User not found")
+
+    if amount > user.cash_balance:
+        flash("Insufficient funds", "error")
+        return redirect(url_for("cash"))
+
+    user.cash_balance -= amount
+    db.session.add(
+        Transaction(
+            user_id=user.id,
+            stock_id=None,
+            transaction_type="WITHDRAW",
+            quantity=0,
+            price=None,
+            amount=amount,
+        )
+    )
+    log_event(user.id, "WITHDRAW", f"Withdrew {amount}")
+
+    try:
+        db.session.commit()
+        flash(f"Withdrew ${amount}", "success")
+    except Exception:
+        db.session.rollback()
+        flash("Could not complete the withdrawal, please try again", "error")
+
+    return redirect(url_for("cash"))
+
 # ADMIN - Manage per-date market schedule overrides (special hours and holidays)
 @app.route("/admin/schedule", methods=["GET", "POST"])
 @login_required
