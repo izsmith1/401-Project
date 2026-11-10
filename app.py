@@ -880,6 +880,26 @@ def admin_stocks():
         stocks=Stock.query.order_by(Stock.ticker).all(),
     )
 
+
+# ADMIN - Review a single user's recorded events (audit trail)
+@app.route("/admin/users/<int:user_id>/events")
+@login_required
+def admin_user_events(user_id):
+    if not current_user.is_admin:
+        abort(403)
+
+    user = db.session.get(User, user_id)
+    if user is None:
+        abort(404, description="User not found")
+
+    events = (
+        EventLog.query.filter_by(user_id=user_id)
+        .order_by(EventLog.event_date.desc())
+        .all()
+    )
+    return render_template("admin_user_events.html", viewed_user=user, events=events)
+
+
 if __name__ == "__main__":
     if "--init-db" in sys.argv:
         init_db()
