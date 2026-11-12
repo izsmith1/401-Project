@@ -1,5 +1,6 @@
 import sys
 import random
+from zoneinfo import ZoneInfo
 from datetime import datetime, timezone, timedelta, time, date
 from decimal import Decimal, InvalidOperation
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
@@ -23,6 +24,8 @@ db = SQLAlchemy(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
+login_manager.login_message_category = "info"
+
 
 class User(UserMixin, db.Model):
     __tablename__ = "users"
@@ -132,13 +135,22 @@ class MarketSchedule(db.Model):
     # Admin who set it
     updated_by = db.Column(db.Integer, db.ForeignKey("administrators.admin_id"), nullable=True)
 
-# Drops all tables and rows (Uncomment db.drop_all to drop all tables and rows)
-# python app.py --init-db
-def init_db():
+# python app.py --create-db : creates any missing tables, never deletes anything
+def create_db():
     with app.app_context():
-#        db.drop_all()
         db.create_all()
-    print("Database schema dropped and recreated. Now run: python seed_stocks.py") 
+    print("Tables created. Now run: python seed_stocks.py")
+
+# python app.py --reset-db : DELETES every table and row, then recreates them
+def reset_db():
+    answer = input("This deletes ALL data in the database. Type 'reset' to continue: ")
+    if answer != "reset":
+        print("Cancelled.")
+        return
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+    print("Database dropped and recreated. Now run: python seed_stocks.py")
 
 def log_event(user_id, event_type, description):
     # Records one line in the event log (who did what, and when). We only add it to the
@@ -164,15 +176,14 @@ def positive_quantity(values):
     quantity = values.get("quantity", default=0, type=int)
     return quantity if quantity > 0 else 0 
 
-def commit_trade(success_message):
+def commit_changes(success_message, error_message):
     try:
         db.session.commit()
         flash(success_message, "success")
-        return True
-    except SQLAlchemyError as error:
+    except SQLAlchemyError:
         db.session.rollback()
-        app.logger.exception("Trade failed", exc_info=error)
-        flash("Trade failed, please try again", "error")
+        app.logger.exception(error_message)
+        flash(error_message, "error")
         return False
 
 # Default market window used when no per-date override row exists.
@@ -181,23 +192,38 @@ DEFAULT_CLOSE = time(17, 0)
 # Mon-Fri
 DEFAULT_TRADING_WEEKDAYS = {0, 1, 2, 3, 4}
 
-def is_market_open():
-    # Plain server-local time, no timezone machinery (student-project style).
-    now = datetime.now()
-    today = now.date()
+MARKET_TZ = ZoneInfo("America/New_York")
 
+def market_now():
+    return datetime.now(MARKET_TZ)
+
+def market_hours_for(day, override=None):
+    # Returns (open_time, close_time) for a date, or None if the market is closed that day.
     # A per-date row (holiday or special hours) overrides the weekly default.
-    override = MarketSchedule.query.filter_by(schedule_date=today).first()
     if override is not None:
         if override.is_closed or override.open_time is None or override.close_time is None:
-            return False
-        return override.open_time <= now.time() < override.close_time
+            return None
+        return override.open_time, override.close_time
 
     # No override: fall back to the default weekday window.
-    if now.weekday() not in DEFAULT_TRADING_WEEKDAYS:
-        return False
-    return DEFAULT_OPEN <= now.time() < DEFAULT_CLOSE
+    if day.weekday() not in DEFAULT_TRADING_WEEKDAYS:
+        return None
+    return DEFAULT_OPEN, DEFAULT_CLOSE
 
+market_switch = None
+
+# Today's (open_time, close_time), or None if the market is closed all day
+def todays_hours():
+    today = market_now().date()
+    override = MarketSchedule.query.filter_by(schedule_date=today).first()
+    return market_hours_for(today, override)
+
+def is_market_open():
+    if market_switch is not None:
+        return market_switch
+
+    hours = todays_hours()
+    return hours is not None and hours[0] <= market_now().time() < hours[1]
 # User loader - required by Flask-Login
 @login_manager.user_loader
 def load_user(user_id):
@@ -214,7 +240,12 @@ def register():
 
         if not username or not email or not password:
             flash("Username, email, and password are required", "error")
-            return render_template("add_user.html")       
+            return render_template("add_user.html") 
+
+        # Checks length of password
+        if len(password) < 8 or len(password.encode("utf-8")) > 72:
+            flash("Password must be 8 to 72 characters", "error")
+            return render_template("add_user.html")  
 
         existing_user = User.query.filter(
             db.or_(User.username == username, User.email == email)
@@ -248,14 +279,24 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    # Visiting the login page signs out whoever is logged in, so the logged-in navbar
+    # never shows next to a login form
+    if current_user.is_authenticated:
+        logout_user()
+  
     if request.method == "POST":
-        user = User.query.filter_by(username=request.form.get("username")).first()
-        if user and bcrypt.check_password_hash(
-            user.password_hash, request.form.get("password")
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        user = User.query.filter_by(username=username).first()
+        # Over 72 bytes can't be a real password (register blocks it) and would crash bcrypt
+        if (
+            user
+            and len(password.encode("utf-8")) <= 72
+            and bcrypt.check_password_hash(user.password_hash, password)
         ):
             login_user(user)
             flash("Logged in successfully!", "success")
-            return redirect(url_for("index"))
+            return redirect(url_for("portfolio"))
         else:
             flash("Invalid username or password", "error")
 
@@ -266,13 +307,140 @@ def login():
 @login_required
 def logout():
     logout_user()
-    return redirect(url_for("login"))
+    return redirect(url_for("index"))
 
 
+# Percent change from old to new, rounded to two decimals
+def percent_change(new, old):
+    return ((new - old) / old * 100).quantize(Decimal("0.01"))
+
+
+# Midnight today on the market's clock, converted to the plain UTC the database stores
+def market_day_start_utc():
+    midnight = market_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+# One row per stock with today's change and the change since launch.
+# Two queries no matter how many stocks there are.
+def market_overview():
+    stocks = Stock.query.order_by(Stock.ticker).all()
+
+    # When each stock's newest price from before today was recorded
+    latest = (
+        db.session.query(
+            PriceHistory.stock_id.label("stock_id"),
+            db.func.max(PriceHistory.timestamp).label("timestamp"),
+        )
+        .filter(PriceHistory.timestamp < market_day_start_utc())
+        .group_by(PriceHistory.stock_id)
+        .subquery()
+    )
+    # The price at that moment is the previous close
+    previous_close = dict(
+        db.session.query(PriceHistory.stock_id, PriceHistory.price)
+        .join(
+            latest,
+            db.and_(
+                PriceHistory.stock_id == latest.c.stock_id,
+                PriceHistory.timestamp == latest.c.timestamp,
+            ),
+        )
+        .all()
+    )
+
+    rows = []
+    for stock in stocks:
+        # A stock created today has no previous close, so compare with its launch price
+        close = previous_close.get(stock.id, stock.initial_price)
+        rows.append({
+            "stock": stock,
+            "day_pct": percent_change(stock.current_price, close),
+            "launch_pct": percent_change(stock.current_price, stock.initial_price),
+            "market_cap": stock.current_price * stock.shares_outstanding,
+        })
+    return rows
+
+
+# HOME - Public market page, the same for visitors and logged-in users
 @app.route("/")
 def index():
-    return render_template("home.html")
+    rows = market_overview()
+    gainers = sorted(
+        (row for row in rows if row["day_pct"] > 0),
+        key=lambda row: row["day_pct"], reverse=True,
+    )
+    losers = sorted(
+        (row for row in rows if row["day_pct"] < 0),
+        key=lambda row: row["day_pct"],
+    )
 
+    # Every stock is already loaded for the movers, so the search just filters that list
+    search = request.args.get("q", "").strip()
+    listed = rows
+    if search:
+        needle = search.lower()
+        listed = [
+            row for row in rows
+            if needle in row["stock"].ticker.lower()
+            or needle in row["stock"].company_name.lower()
+        ]
+
+    return render_template(
+        "home.html",
+        market_open=is_market_open(),
+        market_forced=market_switch is not None,
+        today_hours=todays_hours(),
+        market_tz=market_now().tzname(),
+        rows=listed,
+        search=search,
+        stock_count=len(rows),
+        up_count=len(gainers),
+        down_count=len(losers),
+        gainers=gainers[:3],
+        losers=losers[:3],
+    )
+
+# What the shares the user owns now were worth at each price change since they first
+# bought them. Same shape as a stock's history, so drawChart() can draw it.
+def holdings_value_history(holdings):
+    shares = {h.stock_id: h.quantity for h in holdings}
+    if not shares:
+        return []
+
+    # When the user first bought any of the stocks they hold
+    start = (
+        db.session.query(db.func.min(Transaction.transaction_date))
+        .filter(Transaction.user_id == current_user.id, Transaction.stock_id.in_(shares))
+        .scalar()
+    )
+    # Each stock's price at that moment
+    prices = {}
+    for stock_id in shares:
+        prices[stock_id] = (
+            PriceHistory.query
+            .filter(PriceHistory.stock_id == stock_id, PriceHistory.timestamp <= start)
+            .order_by(PriceHistory.timestamp.desc())
+            .first()
+            .price
+        )
+
+    def point(when):
+        value = sum(shares[s] * prices[s] for s in shares)
+        return {"time": when.isoformat() + "Z", "price": str(value)}
+
+    # One point at the start, one per price change after it, and one for right now
+    points = [point(start)]
+    changes = (
+        PriceHistory.query
+        .filter(PriceHistory.stock_id.in_(shares), PriceHistory.timestamp > start)
+        .order_by(PriceHistory.timestamp)
+    )
+    for change in changes:
+        prices[change.stock_id] = change.price
+        points.append(point(change.timestamp))
+    points.append(point(utc_now()))
+    return points
 
 # READ - Show the user's portfolio (cash, holdings, recent transactions)
 @app.route("/portfolio")
@@ -285,21 +453,26 @@ def portfolio():
         .options(db.joinedload(Holding.stock))
         .all()
     )
+    stock_value = sum(
+        (
+            holding.quantity * holding.stock.current_price
+            for holding in holdings
+        ),
+        Decimal("0.00"),
+    )
+    return render_template("portfolio.html", holdings=holdings, stock_value=stock_value,
+                           value_history=holdings_value_history(holdings), market_open=is_market_open())
+
+# HISTORY - The user's past activity (transactions for now)
+@app.route("/history")
+@login_required
+def history():
     transactions = (
         Transaction.query.filter_by(user_id=current_user.id)
         .order_by(Transaction.transaction_date.desc())
         .all()
     )
-    stock_value = sum(
-        (
-            holding.quantity * holding.stock.current_price
-            for holding in holdings
-            if holding.stock is not None
-        ),
-        Decimal("0.00"),
-    )
-    return render_template("portfolio.html", holdings=holdings, transactions=transactions, 
-                           stock_value=stock_value, market_open=is_market_open())
+    return render_template("history.html", transactions=transactions)
 
 
 # READ - List all stocks with buy forms
@@ -329,7 +502,7 @@ def build_stats(stock):
     )
 
     change = stock.current_price - stock.initial_price
-    change_pct = (change / stock.initial_price * 100).quantize(Decimal("0.01"))
+    change_pct = percent_change(stock.current_price, stock.initial_price)
 
     # Newest points first so LIMIT keeps the most recent, then flip to oldest-first for the graph
     points = history.order_by(PriceHistory.timestamp.desc()).limit(HISTORY_POINTS).all()
@@ -359,16 +532,12 @@ def build_stats(stock):
 @app.route("/stocks/<int:stock_id>/stats")
 @login_required
 def stock_stats(stock_id):
-    stock = db.session.get(Stock, stock_id)
-    if stock is None:
-        abort(404, description="Stock not found")
+    stock = db.get_or_404(Stock, stock_id, description="Stock not found")
     return jsonify(build_stats(stock))
 
 
 # A stock can move at most once every 2 seconds, no matter how many people are watching
 MIN_TICK_SECONDS = 2
-# Each tick moves the price up to 1% up or down
-MAX_TICK_CHANGE_PERCENT = 1
 
 
 # TICK - Randomly move a stock's price (called every few seconds while its dropdown is open
@@ -382,7 +551,7 @@ def tick(stock_id):
         return jsonify(build_stats(stock))
 
     # Lock the stock row so two viewers ticking at the same moment can't both move it
-    stock = Stock.query.with_for_update().get_or_404(stock_id)
+    stock = db.get_or_404(Stock, stock_id, with_for_update=True)
     last = (
         db.session.query(PriceHistory)
         .filter(PriceHistory.stock_id == stock.id)
@@ -391,8 +560,8 @@ def tick(stock_id):
     )
 
     # Only move the price if it hasn't moved in the last few seconds
-    if last is None or utc_now() - last.timestamp >= timedelta(
-        seconds=MIN_TICK_SECONDS
+    if is_market_open() and (
+        last is None or utc_now() - last.timestamp >= timedelta(seconds=MIN_TICK_SECONDS)
     ):
         basis_points = random.randint(-100, 100)  # -1% to +1%
         change = Decimal(basis_points) / Decimal("10000")
@@ -412,9 +581,7 @@ def tick(stock_id):
 @app.route("/buy/<int:stock_id>/preview")
 @login_required
 def buy_preview(stock_id):
-    stock = db.session.get(Stock, stock_id)
-    if stock is None:
-        abort(404, description="Stock not found")
+    stock = db.session.db.get_or_404(Stock, stock_id, description="Stock not found")
     quantity = positive_quantity(request.args)
     cost = stock.current_price * quantity
     cash_after = current_user.cash_balance - cost
@@ -444,14 +611,11 @@ def buy(stock_id):
         flash("Enter a valid number of shares", "error")
         return redirect(url_for("stocks"))
 
-    stock = db.session.get(Stock, stock_id, with_for_update=True)
-    if stock is None:
-        abort(404, description="Stock not found")
+    stock = db.session.get_or_404(Stock, stock_id, with_for_update=True, description="Stock not found")
 
     # Lock the user's row so two trades at once can't both spend the same cash
-    user = db.session.get(User, current_user.id, with_for_update=True)
-    if user is None:
-        abort(404, description="User not found")
+    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True, 
+                                 description="User not found")
     total_cost = stock.current_price * quantity
 
     if user.cash_balance < total_cost:
@@ -489,7 +653,7 @@ def buy(stock_id):
     )
 
     # Save everything together - if anything fails, none of them are saved
-    commit_trade(f"Bought {quantity} shares of {stock.ticker}")
+    commit_changes(f"Bought {quantity} shares of {stock.ticker}", "Trade failed, please try again")
 
     return redirect(url_for("portfolio"))
 
@@ -520,9 +684,7 @@ def average_cost(user_id, stock_id):
 @app.route("/sell/<int:stock_id>/preview")
 @login_required
 def sell_preview(stock_id):
-    stock = db.session.get(Stock, stock_id)
-    if stock is None:
-        abort(404, description="Stock not found")
+    stock = db.get_or_404(Stock, stock_id, description="Stock Not Found")
     quantity = positive_quantity(request.args)
     holding = db.session.query(Holding).filter(
         Holding.user_id == current_user.id, Holding.stock_id == stock.id
@@ -561,14 +723,11 @@ def sell(stock_id):
         flash("Enter a valid number of shares", "error")
         return redirect(url_for("portfolio"))
 
-    stock = db.session.get(Stock, stock_id)
-    if stock is None:
-        abort(404, description="Stock not found")
+    stock = db.session.get_or_404(Stock, stock_id, with_for_update=True, description="Stock not found")
 
     # Lock the user's row and holding so the same shares can't be sold twice
-    user = db.session.get(User, current_user.id)
-    if user is None:
-        abort(404, description="User not found")
+    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True,
+                                 description="User not found")
     holding = (
         db.session.query(Holding)
         .filter(Holding.user_id == user.id, Holding.stock_id == stock.id)
@@ -603,7 +762,7 @@ def sell(stock_id):
     )
 
     # Save everything together
-    commit_trade(f"Sold {quantity} shares of {stock.ticker}")
+    commit_changes(f"Sold {quantity} shares of {stock.ticker}", "Trade failed, please try again")
 
     return redirect(url_for("portfolio"))
 
@@ -639,30 +798,21 @@ def deposit():
         return redirect(url_for("cash"))
 
     # Lock the user's row so two cash changes at once can't clobber each other
-    user = db.session.get(User, current_user.id, with_for_update=True)
-    if user is None:
-        abort(404, description="User not found")
+    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True, 
+                          description="User not found")
 
     user.cash_balance += amount
     db.session.add(
         Transaction(
             user_id=user.id,
-            stock_id=None,
             transaction_type="DEPOSIT",
             quantity=0,
-            price=None,
             amount=amount,
         )
     )
     log_event(user.id, "DEPOSIT", f"Deposited {amount}")
-
-    try:
-        db.session.commit()
-        flash(f"Deposited ${amount}", "success")
-    except Exception:
-        db.session.rollback()
-        flash("Could not complete the deposit, please try again", "error")
-
+    
+    commit_changes(f"Deposited ${amount}", "Could not complete the deposit, please try again")
     return redirect(url_for("cash"))
 
 
@@ -676,9 +826,8 @@ def withdraw():
         return redirect(url_for("cash"))
 
     # Lock the user's row before checking the balance so two withdrawals can't both pass
-    user = db.session.get(User, current_user.id, with_for_update=True)
-    if user is None:
-        abort(404, description="User not found")
+    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True
+                                 , description="User not found")
 
     if amount > user.cash_balance:
         flash("Insufficient funds", "error")
@@ -688,21 +837,14 @@ def withdraw():
     db.session.add(
         Transaction(
             user_id=user.id,
-            stock_id=None,
             transaction_type="WITHDRAW",
             quantity=0,
-            price=None,
             amount=amount,
         )
     )
     log_event(user.id, "WITHDRAW", f"Withdrew {amount}")
 
-    try:
-        db.session.commit()
-        flash(f"Withdrew ${amount}", "success")
-    except Exception:
-        db.session.rollback()
-        flash("Could not complete the withdrawal, please try again", "error")
+    commit_changes(f"Withdrew ${amount}", "Could not complete the withdrawal, please try again")
 
     return redirect(url_for("cash"))
 
@@ -722,6 +864,14 @@ def admin_schedule():
         except ValueError:
             flash("Enter a valid date", "error")
             return redirect(url_for("admin_schedule"))
+        # Past days already happened, only today and later can be changed
+        if schedule_date < market_now().date():
+            flash("You can only change today or a future date", "error")
+            return redirect(url_for("admin_schedule"))
+
+        # Redirect back to the week that was just edited
+        week_url = url_for("admin_schedule", week=schedule_date.isoformat())
+
 
         is_closed = request.form.get("is_closed") == "on"
         open_time = None
@@ -738,11 +888,11 @@ def admin_schedule():
                 ).time()
             except ValueError:
                 flash("Enter valid open and close times", "error")
-                return redirect(url_for("admin_schedule"))
+                return redirect(week_url)
 
             if close_time <= open_time:
                 flash("Close time must be later than open time", "error")
-                return redirect(url_for("admin_schedule"))
+                return redirect(week_url)
 
         # Upsert the row for that date (update existing or create new)
         row = MarketSchedule.query.filter_by(schedule_date=schedule_date).first()
@@ -752,7 +902,7 @@ def admin_schedule():
         row.open_time = open_time
         row.close_time = close_time
         row.is_closed = is_closed
-        row.updated_by = current_user.admin.id if current_user.admin else None
+        row.updated_by = current_user.admin.id
 
         # Record who changed the schedule, saved by the same commit below
         if is_closed:
@@ -761,20 +911,62 @@ def admin_schedule():
             log_event(current_user.id, "MARKET_HOURS_SET", 
                       F"Market hours on {schedule_date} set to {open_time:%H:%M}-{close_time:%H:%M}",
             )
-        try:
-            db.session.commit()
-            flash("Schedule saved", "success")
-        except Exception:
-            db.session.rollback()
-            flash("Could not save the schedule, please try again", "error")
+        commit_changes("Schedule saved", "Could not save the schedule, please try again")
 
-        return redirect(url_for("admin_schedule"))
+        return redirect(week_url)
+
+    # Weekly view: ?week=YYYY-MM-DD shows the Mon-Sun week holding that date, default is this week
+    today = market_now().date()
+    try:
+        anchor = datetime.strptime(request.args.get("week", ""), "%Y-%m-%d").date()
+    except ValueError:
+        anchor = today
+    week_start = anchor - timedelta(days=anchor.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    overrides = {
+        row.schedule_date: row
+        for row in MarketSchedule.query.filter(
+            MarketSchedule.schedule_date.between(week_start, week_end)
+        )
+    }
+    week_days = []
+    for offset in range(7):
+        day = week_start + timedelta(days=offset)
+        override = overrides.get(day)
+        week_days.append({
+            "date": day,
+            "hours": market_hours_for(day, override),
+            "override": override,
+            "is_past": day < today,
+            "is_today": day == today,
+        })
 
     return render_template(
         "admin_schedule.html",
         schedules=MarketSchedule.query.order_by(MarketSchedule.schedule_date).all(),
+        week_days=week_days,
+        week_start=week_start,
+        week_end=week_end,
+        prev_week=(week_start - timedelta(days=7)).isoformat(),
+        next_week=(week_start + timedelta(days=7)).isoformat(),
+        today=today,
+        default_open=DEFAULT_OPEN.strftime("%H:%M"),
+        default_close=DEFAULT_CLOSE.strftime("%H:%M"),
+        market_open=is_market_open(),
     )
 
+# ADMIN - Testing only: flip the market open or closed right now
+@app.route("/admin/market/toggle", methods=["POST"])
+@login_required
+def admin_toggle_market():
+    if not current_user.is_admin:
+        abort(403)
+
+    global market_switch
+    market_switch = not is_market_open()
+    flash("Market is now " + ("open" if market_switch else "closed"), "success")
+    return redirect(url_for("admin_schedule"))
 
 # ADMIN - Remove a per-date schedule override (falls back to the default window)
 @app.route("/admin/schedule/<int:id>/delete", methods=["POST"])
@@ -783,21 +975,17 @@ def admin_delete_schedule(id):
     if not current_user.is_admin:
         abort(403)
 
-    row = MarketSchedule.query.get_or_404(id)
+    row = db.get_or_404(MarketSchedule, id)
+    week_url = url_for("admin_schedule", week=row.schedule_date.isoformat())
     db.session.delete(row)
     log_event(
         current_user.id,
         "SCHEDULE_REMOVED",
         f"Schedule override for {row.schedule_date} removed (back to default hours)",
     )
-    try:
-        db.session.commit()
-        flash("Schedule entry removed", "success")
-    except Exception:
-        db.session.rollback()
-        flash("Could not remove the entry, please try again", "error")
+    commit_changes("Schedule entry removed", "Could not remove the entry, please try again")
 
-    return redirect(url_for("admin_schedule"))
+    return redirect(week_url)
 
 
 # ADMIN - Create new stocks for customers to trade
@@ -857,7 +1045,7 @@ def admin_stocks():
             shares_available=shares_outstanding,
             initial_price=price,
             current_price=price,
-            created_by=current_user.admin.id if current_user.admin else None,
+            created_by=current_user.admin.id
         )
         db.session.add(stock)
         # Assigns stock.id so we can attach the first price history row
@@ -866,12 +1054,7 @@ def admin_stocks():
         db.session.add(PriceHistory(stock_id=stock.id, price=price))
         log_event(current_user.id, "STOCK_CREATED", f"Created stock {ticker} at {price}")
 
-        try:
-            db.session.commit()
-            flash(f"Stock {ticker} created", "success")
-        except Exception:
-            db.session.rollback()
-            flash("Could not create the stock, please try again", "error")
+        commit_changes(f"Stock {ticker} created", "Could not create the stock, please try again")
 
         return redirect(url_for("admin_stocks"))
 
@@ -880,6 +1063,15 @@ def admin_stocks():
         stocks=Stock.query.order_by(Stock.ticker).all(),
     )
 
+# ADMIN - List every account so ana dmin can open one users event log.
+@app.route("/admin/users")
+@login_required
+def admin_users():
+    if not current_user.is_admin:
+        abort(403)
+
+    users = User.query.order_by(User.created_at.desc()).all()
+    return render_template("admin_users.html", users=users)
 
 # ADMIN - Review a single user's recorded events (audit trail)
 @app.route("/admin/users/<int:user_id>/events")
@@ -888,9 +1080,7 @@ def admin_user_events(user_id):
     if not current_user.is_admin:
         abort(403)
 
-    user = db.session.get(User, user_id)
-    if user is None:
-        abort(404, description="User not found")
+    user = db.session.get_or_404(User, user_id, description="User not found")
 
     events = (
         EventLog.query.filter_by(user_id=user_id)
@@ -901,7 +1091,9 @@ def admin_user_events(user_id):
 
 
 if __name__ == "__main__":
-    if "--init-db" in sys.argv:
-        init_db()
+    if "--create-db" in sys.argv:
+        create_db()
+    elif "--reset-db" in sys.argv:
+        reset_db()
     else:
         app.run(host="0.0.0.0", port=8000)

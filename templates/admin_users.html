@@ -1,0 +1,37 @@
+{% extends "admin_base.html" %}
+{% block title %}Users{% endblock %}
+
+{% block admin_content %}
+    <h2 class="h4">All users</h2>
+    <table class="table table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Username</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Joined</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in users %}
+            <tr>
+                <td>
+                    {{ user.username }}
+                    {% if user.is_admin %}<span class="badge bg-primary">Admin</span>{% endif %}
+                </td>
+                <td>{{ user.first_name }} {{ user.last_name }}</td>
+                <td>{{ user.email }}</td>
+                <td>{{ user.created_at.strftime('%Y-%m-%d') }}</td>
+                <td class="text-end">
+                    <a href="{{ url_for('admin_user_events', user_id=user.id) }}" class="btn btn-sm btn-outline-secondary">View events</a>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-muted">No users yet.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

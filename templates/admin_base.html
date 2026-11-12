@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="mb-3">Admin Panel</h1>
+    <ul class="nav nav-tabs mb-4">
+        <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'admin_schedule' }}" href="{{ url_for('admin_schedule') }}">Market Schedule</a></li>
+        <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint == 'admin_stocks' }}" href="{{ url_for('admin_stocks') }}">Stocks</a></li>
+        <li class="nav-item"><a class="nav-link {{ 'active' if request.endpoint in ('admin_users', 'admin_user_events') }}" href="{{ url_for('admin_users') }}">Users &amp; Events</a></li>
+    </ul>
+    {% block admin_content %}{% endblock %}
+{% endblock %}

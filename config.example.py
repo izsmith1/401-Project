@@ -15,8 +15,7 @@
 # 3. Set SECRET_KEY to a random string. Generate one with:
 #       python -c "import secrets; print(secrets.token_hex(32))"
 #
-# 4. First run on a new database: start the app once so it creates the
-#    tables, then load the starting stocks with:
+# 4. First run python app.py --create-db
 #       python seed_stocks.py
 #
 # Never put real passwords in this file - it IS committed to git.
@@ -24,10 +23,10 @@
 
 #Option A - local MySQL on your own computer
 #Create the database first in MySQL Workbench: CREATE DATABASE stockdb;
-SQLALCHEMY_DATABASE_URI = "mysql+pymysql://root:YOUR_MYSQL_PASSWORD@localhost:3306/stockdb"
+SQLALCHEMY_DATABASE_URI = "mysql+pymysql://root:YOUR_MYSQL_PASSWORD@localhost:3306/YOUR-DB-HERE"
 
 #Option B - shared AWS RDS database (ask the team for the endpoint and login)
-#SQLALCHEMY_DATABASE_URI = "mysql+pymysql://USERNAME:PASSWORD@YOUR-RDS-ENDPOINT.rds.amazonaws.com:3306/stockdb"
+#SQLALCHEMY_DATABASE_URI = "mysql+pymysql://USERNAME:PASSWORD@YOUR-RDS-ENDPOINT.rds.amazonaws.com:3306/YOUR-DB-HERE"
 
 #Signs login sessions - anyone who knows it can forge a login, so keep it secret
 SECRET_KEY = 'paste-your-generated-key-here'

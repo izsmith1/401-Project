@@ -1,74 +1,154 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Home</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
-</head>
-<body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+{% extends "base.html" %}
+{% block title %}Markets{% endblock %}
+
+{# This page runs edge to edge, so it places its own containers and flash messages #}
+{% block container_class %}{% endblock %}
+{% block flashes %}{% endblock %}
+
+{# A percent change with its sign, green when up and red when down #}
+{% macro change(pct) %}
+    <span class="{{ 'text-up' if pct > 0 else 'text-down' if pct < 0 else 'text-muted' }}">{{ '+' if pct > 0 }}{{ pct }}%</span>
+{% endmacro %}
+
+{# One list on the movers board #}
+{% macro movers(title, items, empty_text) %}
+    <h3 class="board-heading">{{ title }}</h3>
+    {% if items %}
+    <ul class="board-list">
+        {% for row in items %}
+        <li>
+            <span class="board-ticker">{{ row.stock.ticker }}</span>
+            <span class="board-company">{{ row.stock.company_name }}</span>
+            <span class="board-price">${{ "{:,.2f}".format(row.stock.current_price) }}</span>
+            <span class="board-change">{{ change(row.day_pct) }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="board-empty">{{ empty_text }}</p>
+    {% endif %}
+{% endmacro %}
+
+{% block content %}
+    <section class="hero">
         <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">Stock Trader</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="mainNav">
-                <ul class="navbar-nav ms-auto">
-                    {% if current_user.is_authenticated %}
-                    <li class="nav-item"><a class="nav-link" href="{{ url_for('stocks') }}">Stocks</a></li>
-                    <li class="nav-item"><a class="nav-link" href="{{ url_for('portfolio') }}">Portfolio</a></li>
-                    <li class="nav-item"><a class="nav-link" href="{{ url_for('cash') }}">Cash</a></li>
-                        {% if current_user.is_admin %}
-                        <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_schedule') }}">Admin Panel</a></li>
+            {% include "_flash_messages.html" %}
+            <div class="row align-items-center g-5">
+                <div class="col-lg-6">
+                    <h1 class="hero-title">A stock market you can practice on</h1>
+                    <p class="hero-text">
+                        Strader is a simulated exchange. Start with $10,000 in virtual cash,
+                        trade while the market is open, and see how your picks do.
+                        No real money is involved.
+                    </p>
+                    <div class="d-flex flex-wrap gap-2 mb-4">
+                        {% if current_user.is_authenticated %}
+                            <a href="{{ url_for('portfolio') }}" class="btn btn-amber btn-lg">Go to your portfolio</a>
+                            <a href="{{ url_for('stocks') }}" class="btn btn-outline-light btn-lg">Trade stocks</a>
+                        {% else %}
+                            <a href="{{ url_for('register') }}" class="btn btn-amber btn-lg">Create an account</a>
+                            <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-lg">Log in</a>
                         {% endif %}
-                    <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
-                    {% else %}
-                    <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
-                    <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Create account</a></li>
-                    {% endif %}
-                </ul>
+                    </div>
+                    <p class="hero-status">
+                        <span class="status-dot {{ 'is-open' if market_open }}"></span>
+                        {% if market_forced %}
+                            Market {{ 'open' if market_open else 'closed' }} (admin test switch)
+                        {% elif market_open %}
+                            Market open until {{ today_hours[1].strftime('%H:%M') }} {{ market_tz }}
+                        {% elif today_hours %}
+                            Market closed. Hours today are {{ today_hours[0].strftime('%H:%M') }} to {{ today_hours[1].strftime('%H:%M') }} {{ market_tz }}
+                        {% else %}
+                            Market closed today
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div class="col-lg-6">
+                    <div class="board">
+                        <h2 class="board-title">Today's movers</h2>
+                        {{ movers('Gaining', gainers, 'No stock is up yet today.') }}
+                        {{ movers('Falling', losers, 'No stock is down yet today.') }}
+                    </div>
+                </div>
             </div>
         </div>
-    </nav>
+    </section>
 
-    <div class="container mt-5">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-        {% for category, message in messages %}
-        <div class="alert alert-{{ 'danger' if category == 'error' else category }}">{{ message }}</div>
-        {% endfor %}
-        {% endif %}
-        {% endwith %}
-
-        {% if current_user.is_authenticated %}
-            <h1>Welcome, {{ current_user.first_name }}!</h1>
-            <p class="lead">Cash available: <strong>${{ "%.2f"|format(current_user.cash_balance) }}</strong></p>
-
-            {% if current_user.is_admin %}
-            <div class="card mb-4">
-                <div class="card-body">
-                    <h2 class="card-title h4">Admin Dashboard</h2>
-                    <p class="card-text">This is visible only to admins: Manage users, settings, etc.</p>
-                </div>
+    <section class="container py-5" id="stocks">
+        <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
+            <div>
+                <h2 class="mb-1">All stocks</h2>
+                <p class="text-muted mb-0">
+                    {{ stock_count }} listed. {{ up_count }} up and {{ down_count }} down today.
+                </p>
             </div>
-            {% else %}
-            <div class="card mb-4">
-                <div class="card-body">
-                    <h2 class="card-title h4">User Dashboard</h2>
-                    <p class="card-text">This is visible only to regular users.</p>
-                </div>
-            </div>
-            {% endif %}
+            <form method="GET" action="{{ url_for('index') }}#stocks" class="d-flex gap-2 flex-grow-1 flex-sm-grow-0" role="search">
+                <label for="q" class="visually-hidden">Search by ticker or company</label>
+                <input type="search" class="form-control" id="q" name="q" value="{{ search }}"
+                       placeholder="Ticker or company" maxlength="50">
+                <button type="submit" class="btn btn-outline-secondary">Search</button>
+            </form>
+        </div>
 
-            <a href="{{ url_for('stocks') }}" class="btn btn-success">Buy Stocks</a>
-            <a href="{{ url_for('portfolio') }}" class="btn btn-primary">My Portfolio</a>
+        {% if rows %}
+        <div class="table-responsive">
+            <table class="table align-middle market-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Ticker</th>
+                        <th scope="col" class="d-none d-md-table-cell">Company</th>
+                        <th scope="col" class="text-end">Price</th>
+                        <th scope="col" class="text-end">Today</th>
+                        <th scope="col" class="text-end d-none d-sm-table-cell">Since launch</th>
+                        <th scope="col" class="text-end d-none d-lg-table-cell">Market cap</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr>
+                        <th scope="row">{{ row.stock.ticker }}</th>
+                        <td class="d-none d-md-table-cell">{{ row.stock.company_name }}</td>
+                        <td class="text-end">${{ "{:,.2f}".format(row.stock.current_price) }}</td>
+                        <td class="text-end">{{ change(row.day_pct) }}</td>
+                        <td class="text-end d-none d-sm-table-cell">{{ change(row.launch_pct) }}</td>
+                        <td class="text-end d-none d-lg-table-cell">${{ "{:,.0f}".format(row.market_cap) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% elif search %}
+        <p>No stock matches "{{ search }}". <a href="{{ url_for('index') }}#stocks">Show all stocks</a></p>
         {% else %}
-            <h1>You are not logged in.</h1>
-            <p class="lead">Log in or create an account to start trading.</p>
-            <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
-            <a href="{{ url_for('register') }}" class="btn btn-secondary">Create account</a>
+        <p>No stocks are listed yet.</p>
         {% endif %}
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
-</body>
-</html>
+    </section>
+
+    <section class="steps">
+        <div class="container py-5">
+            <h2 class="mb-4">How it works</h2>
+            <ol class="row g-4 list-unstyled mb-0">
+                <li class="col-md-4">
+                    <span class="step-number">1</span>
+                    <h3 class="h5">Create an account</h3>
+                    <p class="text-muted mb-0">Every new account starts with $10,000 in virtual cash.</p>
+                </li>
+                <li class="col-md-4">
+                    <span class="step-number">2</span>
+                    <h3 class="h5">Buy and sell</h3>
+                    <p class="text-muted mb-0">Prices move while the market is open. Check the chart, then place your trade.</p>
+                </li>
+                <li class="col-md-4">
+                    <span class="step-number">3</span>
+                    <h3 class="h5">Track your portfolio</h3>
+                    <p class="text-muted mb-0">See what you own, what it's worth now, and every trade you've made.</p>
+                </li>
+            </ol>
+        </div>
+    </section>
+
+    <footer class="container py-4 small text-muted">
+        Strader is a class project. Prices are simulated, and no real money or real securities are involved.
+    </footer>
+{% endblock %}
