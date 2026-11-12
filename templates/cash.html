@@ -3,7 +3,7 @@
 
 {% block content %}
     <h1>Cash</h1>
-    <p class="lead">Current balance: <strong>${{ ":,.2f"}.format(current_user.cash_balance) }</strong></p>
+    <p class="lead">Current balance: <strong>${{ { ":,.2f"}.format(current_user.cash_balance) }}</strong></p>
 
     <div class="row">
         <div class="col-md-6 mb-4">
