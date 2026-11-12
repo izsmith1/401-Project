@@ -547,7 +547,7 @@ MIN_TICK_SECONDS = 2
 def tick(stock_id):
     # Market closed: don't move the price or add a PriceHistory row, just return current stats
     if not is_market_open():
-        stock = Stock.query.get_or_404(stock_id)
+        db.get_or_404(Stock, stock_id, description="Stock not found")
         return jsonify(build_stats(stock))
 
     # Lock the stock row so two viewers ticking at the same moment can't both move it
@@ -581,7 +581,7 @@ def tick(stock_id):
 @app.route("/buy/<int:stock_id>/preview")
 @login_required
 def buy_preview(stock_id):
-    stock = db.session.db.get_or_404(Stock, stock_id, description="Stock not found")
+    stock = db.get_or_404(Stock, stock_id, description="Stock not found")
     quantity = positive_quantity(request.args)
     cost = stock.current_price * quantity
     cash_after = current_user.cash_balance - cost
@@ -611,10 +611,10 @@ def buy(stock_id):
         flash("Enter a valid number of shares", "error")
         return redirect(url_for("stocks"))
 
-    stock = db.session.get_or_404(Stock, stock_id, with_for_update=True, description="Stock not found")
+    stock = db.get_or_404(Stock, stock_id, with_for_update=True, description="Stock not found")
 
     # Lock the user's row so two trades at once can't both spend the same cash
-    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True, 
+    user = db.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True, 
                                  description="User not found")
     total_cost = stock.current_price * quantity
 
@@ -723,10 +723,10 @@ def sell(stock_id):
         flash("Enter a valid number of shares", "error")
         return redirect(url_for("portfolio"))
 
-    stock = db.session.get_or_404(Stock, stock_id, with_for_update=True, description="Stock not found")
+    stock = db.get_or_404(Stock, stock_id, with_for_update=True, description="Stock not found")
 
     # Lock the user's row and holding so the same shares can't be sold twice
-    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True,
+    user = db.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True,
                                  description="User not found")
     holding = (
         db.session.query(Holding)
@@ -798,7 +798,7 @@ def deposit():
         return redirect(url_for("cash"))
 
     # Lock the user's row so two cash changes at once can't clobber each other
-    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True, 
+    user = db.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True, 
                           description="User not found")
 
     user.cash_balance += amount
@@ -826,7 +826,7 @@ def withdraw():
         return redirect(url_for("cash"))
 
     # Lock the user's row before checking the balance so two withdrawals can't both pass
-    user = db.session.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True
+    user = db.get_or_404(User, current_user.id, with_for_update=True, populate_existing=True
                                  , description="User not found")
 
     if amount > user.cash_balance:
@@ -1080,7 +1080,7 @@ def admin_user_events(user_id):
     if not current_user.is_admin:
         abort(403)
 
-    user = db.session.get_or_404(User, user_id, description="User not found")
+    user = db.get_or_404(User, user_id, description="User not found")
 
     events = (
         EventLog.query.filter_by(user_id=user_id)
