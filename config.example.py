@@ -23,7 +23,7 @@
 
 #Option A - local MySQL on your own computer
 #Create the database first in MySQL Workbench: CREATE DATABASE stockdb;
-SQLALCHEMY_DATABASE_URI = "mysql+pymysql://root:YOUR_MYSQL_PASSWORD@localhost:3306/YOUR-DB-HERE"
+SQLALCHEMY_DATABASE_URI = "mysql+pymysql://root:Password@localhost:3306/stockdb"
 
 #Option B - shared AWS RDS database (ask the team for the endpoint and login)
 #SQLALCHEMY_DATABASE_URI = "mysql+pymysql://USERNAME:PASSWORD@YOUR-RDS-ENDPOINT.rds.amazonaws.com:3306/YOUR-DB-HERE"
