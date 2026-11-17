@@ -13,6 +13,7 @@
                         <div class="mb-3">
                             <label for="deposit-amount" class="form-label">Amount</label>
                             <input type="number" class="form-control" id="deposit-amount" name="amount" step="0.01" min="0.01" required>
+                            <div class="form-text" data-preview-for="deposit-amount"></div>
                         </div>
                         <button type="submit" class="btn btn-success">Deposit</button>
                     </form>
@@ -27,6 +28,7 @@
                         <div class="mb-3">
                             <label for="withdraw-amount" class="form-label">Amount</label>
                             <input type="number" class="form-control" id="withdraw-amount" name="amount" step="0.01" min="0.01" required>
+                            <div class="form-text" data-preview-for="withdraw-amount"></div>
                         </div>
                         <button type="submit" class="btn btn-primary">Withdraw</button>
                     </form>
@@ -34,4 +36,18 @@
             </div>
         </div>
     </div>
+{% endblock %}
+{% block scripts %}
+    <script>
+        // Show what's typed in each amount box as dollars with commas, e.g. 5000 -> $5,000.00
+        const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+        document.querySelectorAll('[data-preview-for]').forEach(function (preview) {
+            const input = document.getElementById(preview.dataset.previewFor);
+            input.addEventListener('input', function () {
+                const value = parseFloat(input.value);
+                preview.textContent = value > 0 ? dollars.format(value) : '';
+            });
+        });
+    </script>
 {% endblock %}
