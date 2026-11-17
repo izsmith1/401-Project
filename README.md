@@ -36,9 +36,13 @@ Run these from the project folder (the one that contains `app.py`).
 ### 1. (Recommended) Create a virtual environment
 
 ```bash
+# Mac/Linux
 python3 -m venv venv
-source venv/bin/activate        # Mac/Linux
-# venv\Scripts\activate         # Windows PowerShell
+source venv/bin/activate
+
+# Microsoft Windows
+python -m venv venv
+venv\Scripts\activate           
 ```
 
 ### 2. Install the dependencies
@@ -49,12 +53,11 @@ pip install -r requirements.txt
 
 ### 3. Create your config.py
 
-`config.py` holds the database password and the secret key, so it is **gitignored and never
-committed**. Each person keeps their own copy. Copy the template:
+`config.py` holds the database password and the secret key, so it is **gitignored and never committed**. Each person keeps their own copy. Copy the template:
 
 ```bash
 cp config.example.py config.py           # Mac/Linux
-# Copy-Item config.example.py config.py   # Windows PowerShell
+Copy-Item config.example.py config.py    # Windows PowerShell
 ```
 
 Then open `config.py` and set `SECRET_KEY` to a random string. Generate one with:
@@ -67,8 +70,8 @@ Paste the output as the value of `SECRET_KEY`.
 
 ## Database setup — choose ONE
 
-In `config.py` there are two `SQLALCHEMY_DATABASE_URI` options. **Use exactly one** and
-delete or comment out the other.
+In `config.py` there are two `SQLALCHEMY_DATABASE_URI` options. 
+**Use exactly one** and delete or comment out the other.
 
 ### Option A — Local MySQL (development)
 
@@ -124,8 +127,7 @@ python app.py --create-db      # creates any missing tables (safe, never deletes
 python seed_stocks.py          # loads the starting stocks with 30 days of price history
 ```
 
-There is also a destructive reset command. It **deletes every table and row**, then recreates
-them. Use it only on a database you are willing to wipe (typically a local dev database):
+There is also a destructive reset command. It **deletes every table and row**, then recreates them. Use it only on a database you are willing to wipe (typically a local dev database):
 
 ```bash
 python app.py --reset-db       # DELETES ALL DATA, then recreates empty tables
@@ -155,10 +157,8 @@ In the AWS console, create an RDS database with engine **MySQL** (Free tier temp
 - **Master password:** a password you won't forget
 - **Database port:** `3306`
 - **Initial database name:** your database name (for example `stockdb`)
-- **Public access:** **Yes** — required so your local Flask app can reach the RDS database
-  during development
-- **VPC security group:** create one, then under **Inbound rules** add a **MYSQL/Aurora** rule
-  (this sets protocol TCP, port 3306)
+- **Public access:** **Yes** — required so your local Flask app can reach the RDS database during development
+- **VPC security group:** create one, then under **Inbound rules** add a **MYSQL/Aurora** rule (this sets protocol TCP, port 3306)
 
 Then copy the database **Endpoint** from the RDS console and put it in `config.py` Option B
 (see *Option B — AWS RDS MySQL* above):
@@ -167,11 +167,9 @@ Then copy the database **Endpoint** from the RDS console and put it in `config.p
 mysql+pymysql://admin:password@your-rds-endpoint.rds.amazonaws.com:3306/stockdb
 ```
 
-> **Security note:** opening the inbound 3306 rule to **Anywhere-IPv4 (`0.0.0.0/0`)** is only
-> acceptable during development because it simplifies connecting your computer to RDS. The
-> stricter target setup is: RDS in a **private subnet** with inbound 3306 allowed **only from the
-> EC2 application tier's security group**, and no public access. Tighten the rule to that before
-> treating the deployment as production.
+**Security note:** opening the inbound 3306 rule to **Anywhere-IPv4 (`0.0.0.0/0`)** is only acceptable during development because it simplifies connecting your computer to RDS. 
+The stricter target setup is: RDS in a **private subnet** with inbound 3306 allowed **only from the EC2 application tier's security group**, and no public access. 
+Tighten the rule to that before treating the deployment as production.
 
 ### The EC2 application server (Tier 2)
 

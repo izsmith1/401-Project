@@ -416,14 +416,15 @@ def holdings_value_history(holdings):
     )
     # Each stock's price at that moment
     prices = {}
-    for stock_id in shares:
-        prices[stock_id] = (
+    for h in holdings:
+        row = (
             PriceHistory.query
-            .filter(PriceHistory.stock_id == stock_id, PriceHistory.timestamp <= start)
+            .filter(PriceHistory.stock_id == h.stock_id, PriceHistory.timestamp <= start)
             .order_by(PriceHistory.timestamp.desc())
             .first()
-            .price
         )
+        # Stock created after the user's first trade: it had no price yet, so use its listing price
+        prices[h.stock_id] = row.price if row else h.stock.initial_price
 
     def point(when):
         value = sum(shares[s] * prices[s] for s in shares)
@@ -547,7 +548,7 @@ MIN_TICK_SECONDS = 2
 def tick(stock_id):
     # Market closed: don't move the price or add a PriceHistory row, just return current stats
     if not is_market_open():
-        db.get_or_404(Stock, stock_id, description="Stock not found")
+        stock = db.get_or_404(Stock, stock_id, description="Stock not found")
         return jsonify(build_stats(stock))
 
     # Lock the stock row so two viewers ticking at the same moment can't both move it
@@ -810,9 +811,9 @@ def deposit():
             amount=amount,
         )
     )
-    log_event(user.id, "DEPOSIT", f"Deposited {amount}")
+    log_event(user.id, "DEPOSIT", f"Deposited ${amount:,.2f}")
     
-    commit_changes(f"Deposited ${amount}", "Could not complete the deposit, please try again")
+    commit_changes(f"Deposited ${amount:,.2f}", "Could not complete the deposit, please try again")
     return redirect(url_for("cash"))
 
 
@@ -842,9 +843,9 @@ def withdraw():
             amount=amount,
         )
     )
-    log_event(user.id, "WITHDRAW", f"Withdrew {amount}")
+    log_event(user.id, "WITHDRAW", f"Withdrew ${amount:,.2f}")
 
-    commit_changes(f"Withdrew ${amount}", "Could not complete the withdrawal, please try again")
+    commit_changes(f"Withdrew ${amount:,.2f}", "Could not complete the withdrawal, please try again")
 
     return redirect(url_for("cash"))
 

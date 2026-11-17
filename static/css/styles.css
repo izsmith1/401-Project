@@ -7,6 +7,10 @@
     --paper: #f3f5f9;     /* alternate section background */
     --up: #14804a;        /* price went up */
     --down: #c92a2a;      /* price went down */
+    --canvas: #edf1f6;    /* page background */ 
+    --line: #d8dfe9;      /* sheet borders and row rules */
+    --muted: #5b6678;     /* table headers, quiet text */
+    --topbar-h: 3.5rem;   /* height of the logged-in top bar */       
 }
 
 /* ----- Brand ----- */
@@ -88,11 +92,7 @@ h1, h2 { color: var(--ink); }
 .board-change { text-align: right; font-weight: 600; }
 .board-empty { color: #5b6678; padding: .55rem 0; margin: 0; border-top: 1px solid #e6eaf0; }
 
-/* ----- Home: stock table and steps ----- */
-.market-table { font-variant-numeric: tabular-nums; }
-.market-table thead th { color: #5b6678; font-weight: 600; border-bottom-width: 2px; }
-
-.steps { background-color: var(--paper); }
+.steps { background-color: #fff; border-top: 1px solid var(--line); }
 .step-number {
     display: block;
     font-family: "Bricolage Grotesque", system-ui, sans-serif;
@@ -103,8 +103,134 @@ h1, h2 { color: var(--ink); }
     margin-bottom: .5rem;
 }
 
+/* ----- Surfaces: tinted page, white sheets for data ----- */
+body { background-color: var(--canvas); }
+
+.sheet {
+    background-color: #fff;
+    border: 1px solid var(--line);
+    border-radius: .75rem;
+    overflow: hidden;
+    margin-bottom: 2rem;
+}
+.sheet-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: .25rem 1rem;
+    padding: 1rem 1.25rem .75rem;
+}
+.sheet-title { font-size: 1.15rem; margin: 0; }
+.sheet-meta { color: var(--muted); font-size: .9rem; margin: 0; }
+.sheet-body { padding: 0 1.25rem 1rem; }
+
+/* A table sitting directly on a sheet */
+.sheet-table {
+    margin-bottom: 0;
+    font-variant-numeric: tabular-nums;
+    --bs-table-striped-bg: #f7f9fc;
+    --bs-table-hover-bg: #f1f4f9;
+}
+.sheet-table > :not(caption) > * > * { padding: .7rem .75rem; border-bottom-color: var(--line); }
+.sheet-table > :not(caption) > * > *:first-child { padding-left: 1.25rem; }
+.sheet-table > :not(caption) > * > *:last-child { padding-right: 1.25rem; }
+.sheet-table > :not(:first-child) { border-top: 0; }
+.sheet-table tbody tr:last-child > * { border-bottom: 0; }
+.sheet-table thead th {
+    background-color: #f6f8fb;
+    color: var(--muted);
+    font-size: .85rem;
+    font-weight: 600;
+    border-top: 1px solid var(--line);
+}
+
+/* The expanded row on the Stocks page: sunk into the sheet */
+.drawer {
+    background-color: var(--canvas);
+    box-shadow: inset 0 1px 3px rgba(18, 35, 63, .1);
+    border-bottom: 1px solid var(--line);
+}
+
+/* Portfolio totals: one strip, three readings */
+.totals { display: grid; grid-template-columns: repeat(3, 1fr); }
+.totals > div { padding: 1rem 1.25rem; }
+.totals > div + div { border-left: 1px solid var(--line); }
+.totals dt { color: var(--muted); font-size: .85rem; font-weight: 600; }
+.totals dd {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 1.5rem;
+    color: var(--ink);
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 575.98px) {
     .hero { padding: 3rem 0; }
     .board-list li { grid-template-columns: 3.5rem 1fr 4.75rem; }
     .board-company { display: none; }
+    .totals { grid-template-columns: 1fr; }
+    .totals > div + div { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* ----- Sidebar (logged-in pages) ----- */
+.sidebar.offcanvas {
+    width: 240px;
+    background-color: var(--ink);
+    border-right: 0;
+}
+.sidebar .navbar-brand { color: #fff; }
+.sidebar-section {
+    color: var(--ink-soft);
+    font-size: .75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin: 1.5rem 0 .35rem;
+    padding: 0 .75rem;
+    opacity: .7;
+}
+.sidebar .nav-link {
+    color: var(--ink-soft);
+    border-radius: .375rem;
+    padding: .45rem .75rem;
+}
+.sidebar .nav-link:hover { color: #fff; background-color: rgba(255, 255, 255, .08); }
+/* Same padding as the top bar, so the ☰ button doesn't jump when the sidebar opens or closes */
+
+/* Amber stays the call-to-action colour, so the active page only gets an amber edge */
+.sidebar .nav-link.active {
+    color: #fff;
+    font-weight: 600;
+    background-color: rgba(255, 255, 255, .12);
+    box-shadow: inset 3px 0 0 var(--amber);
+}
+
+/* Wide screens: the sidebar is shown unless the user hid it, and the page shifts to make room */
+@media (min-width: 992px) {
+    .sidebar.offcanvas {
+        transform: none !important;
+        visibility: visible !important;
+        z-index: 1030; /* below modals, so the Buy/Sell popups still cover it */
+        /* visibility switches at the end, so the slide-out animation still plays */
+        transition: transform .3s ease-in-out, visibility .3s;
+    }
+    body.sidebar-hidden .sidebar.offcanvas {
+        transform: translateX(-100%) !important;
+        visibility: hidden !important; /* stops Tab from reaching links you can't see */
+    }
+
+    body.has-sidebar { padding-left: 240px; transition: padding-left .3s ease-in-out; }
+    body.has-sidebar.sidebar-hidden { padding-left: 0; }
+}
+
+.sidebar.offcanvas {
+    top: var(--topbar-h); /* start under the top bar so the bar always shows */
+    width: 240px;
+    background-color: var(--ink);
+    border-right: 0;
+}
+
+.topbar { height: var(--topbar-h); }
+/* The top bar is fixed, so push the page down to start below it */
+body.has-sidebar { padding-top: var(--topbar-h); }

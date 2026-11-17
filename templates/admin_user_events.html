@@ -3,29 +3,30 @@
 
 {% block admin_content %}
     <h2 class="h4">Events for {{ viewed_user.username }}</h2>
-
-    <table class="table table-striped mt-4">
-        <thead>
-            <tr>
-                <th>When</th>
-                <th>Type</th>
-                <th>Details</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for event in events %}
-            <tr>
-                <td>{{ event.event_date.strftime('%Y-%m-%d %H:%M') }}</td>
-                <td>{{ event.event_type }}</td>
-                <td>{{ event.description }}</td>
-            </tr>
-            {% else %}
-            <tr>
-                <td colspan="3">No events recorded for this user.</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="sheet mt-4">
+        <table class="table table-striped sheet-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Type</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in events %}
+                <tr>
+                    <td>{{ event.event_date.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ event.event_type }}</td>
+                    <td>{{ event.description }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3">No events recorded for this user.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 
     <a href="{{ url_for('admin_users') }}" class="btn btn-secondary">Back to users</a>
 {% endblock %}

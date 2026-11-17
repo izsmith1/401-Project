@@ -92,8 +92,8 @@
         </div>
 
         {% if rows %}
-        <div class="table-responsive">
-            <table class="table align-middle market-table">
+        <div class="sheet"><div class="table-responsive">
+            <table class="table align-middle sheet-table">
                 <thead>
                     <tr>
                         <th scope="col">Ticker</th>
@@ -117,7 +117,7 @@
                     {% endfor %}
                 </tbody>
             </table>
-        </div>
+        </div></div>
         {% elif search %}
         <p>No stock matches "{{ search }}". <a href="{{ url_for('index') }}#stocks">Show all stocks</a></p>
         {% else %}
